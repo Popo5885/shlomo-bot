@@ -1,0 +1,27 @@
+# Local PostgreSQL — port 5433 on host maps to 5432 in the container.
+# Ensures the `postgres` role exists (fixes "role postgres does not exist" when
+# the DB was previously created with a different POSTGRES_USER).
+#
+# First run (or after changing credentials): docker compose up -d
+# Reset data: docker compose down -v && docker compose up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: youthful-torvalds-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app
+    ports:
+      - '5433:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d app']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
