@@ -23,11 +23,10 @@ COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/src/db ./src/db
-COPY knexfile.ts ./
+COPY scripts/migrate-prod.mjs ./scripts/
 
-# Run migrations on startup, then start server
 ENV NODE_ENV=production
 EXPOSE 3000
 
-CMD ["sh", "-c", "node dist/index.js"]
+# Run DB migrations then start the API server
+CMD ["sh", "-c", "node scripts/migrate-prod.mjs && node dist/index.js"]

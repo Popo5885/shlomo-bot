@@ -26,13 +26,17 @@ const httpServer = createServer(app);
 
 // ── Global Middleware ──
 app.use(helmet());
+const allowedOrigins: string[] = [
+  'http://localhost:3001',
+  'http://localhost:3002',
+  'http://127.0.0.1:3001',
+  'http://127.0.0.1:3002',
+];
+if (env.FRONTEND_URL) {
+  env.FRONTEND_URL.split(',').forEach(u => allowedOrigins.push(u.trim()));
+}
 app.use(cors({
-  origin: [
-    'http://localhost:3001',
-    'http://localhost:3002',
-    'http://127.0.0.1:3001',
-    'http://127.0.0.1:3002',
-  ],
+  origin: allowedOrigins,
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));

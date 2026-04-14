@@ -20,6 +20,9 @@ const envSchema = z.object({
   // AES-256 encryption key (64 hex chars = 32 bytes)
   AUTH_DATA_ENCRYPTION_KEY: z.string().length(64).regex(/^[0-9a-fA-F]+$/),
 
+  // CORS — comma-separated list of allowed origins (production)
+  FRONTEND_URL: z.string().optional(),
+
   // WhatsApp
   WA_SESSIONS_PATH: z.string().default('./data/wa-sessions'),
 });
