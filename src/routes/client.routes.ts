@@ -827,20 +827,83 @@ clientRouter.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const wsId = req.workspace!.id;
-      const hourlyStats = await db('message_dispatches').where({ workspace_id: wsId }).whereNotNull('sent_at')
+
+      // Use message_views for read-time analysis if data exists; fallback to dispatch sent_at
+      const viewHourly = await db('message_views').where({ workspace_id: wsId })
+        .groupByRaw('EXTRACT(HOUR FROM viewed_at)')
+        .select(
+          db.raw('EXTRACT(HOUR FROM viewed_at)::int as hour'),
+          db.raw('COUNT(*)::int as total_views'),
+        )
+        .orderBy('hour');
+
+      const dispatchHourly = await db('message_dispatches').where({ workspace_id: wsId }).whereNotNull('sent_at')
         .groupByRaw('EXTRACT(HOUR FROM sent_at)')
         .select(db.raw('EXTRACT(HOUR FROM sent_at)::int as hour'), db.raw('COUNT(*)::int as total_sent'),
                 db.raw('SUM(CASE WHEN is_success THEN 1 ELSE 0 END)::int as total_delivered'),
                 db.raw('SUM(views_count)::int as total_views'),
                 db.raw('ROUND(AVG(CASE WHEN is_success THEN 100.0 ELSE 0 END), 1) as success_rate'))
         .orderBy('hour');
-      const qualified = hourlyStats.filter((h: any) => h.total_sent >= 5);
-      const bestHour = qualified.length > 0
+
+      // Merge view data into dispatch hourly
+      const viewMap = Object.fromEntries(viewHourly.map((v: any) => [v.hour, v.total_views]));
+      const hourlyStats = dispatchHourly.map((h: any) => ({
+        ...h,
+        actual_views: viewMap[h.hour] ?? 0,
+        view_rate: h.total_sent > 0 ? Math.round(((viewMap[h.hour] ?? 0) / h.total_sent) * 100) : 0,
+      }));
+
+      // Best hour = highest view_rate among hours with enough sends
+      const qualified = hourlyStats.filter((h: any) => h.total_sent >= 3);
+      const bestByViews = qualified.length > 0
+        ? qualified.reduce((best: any, h: any) => h.view_rate > best.view_rate ? h : best, qualified[0])
+        : null;
+      const bestBySend = qualified.length > 0
         ? qualified.reduce((best: any, h: any) => Number(h.success_rate) > Number(best.success_rate) ? h : best, qualified[0])
         : null;
+
       res.json({
         success: true,
-        data: { hourly: hourlyStats, best_hour: bestHour ? Number(bestHour.hour) : null, best_success_rate: bestHour ? Number(bestHour.success_rate) : null },
+        data: {
+          hourly: hourlyStats,
+          best_hour: bestByViews ? Number(bestByViews.hour) : (bestBySend ? Number(bestBySend.hour) : null),
+          best_view_rate: bestByViews ? bestByViews.view_rate : null,
+          best_success_rate: bestBySend ? Number(bestBySend.success_rate) : null,
+        },
+      });
+    } catch (err) { next(err); }
+  }
+);
+
+clientRouter.get(
+  '/campaigns/:id/views',
+  requirePermission('can_view_analytics'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const wsId = req.workspace!.id;
+      const campaignId = req.params.id;
+
+      const [viewCount, dispatchCount, dispatched] = await Promise.all([
+        db('message_views').where({ workspace_id: wsId, campaign_id: campaignId }).count('id as count').first(),
+        db('message_dispatches').where({ workspace_id: wsId, campaign_id: campaignId }).count('id as count').first(),
+        db('message_dispatches').where({ workspace_id: wsId, campaign_id: campaignId })
+          .select(db.raw('SUM(views_count)::int as legacy_views'))
+          .first(),
+      ]);
+
+      const uniqueViews = Number((viewCount as any)?.count ?? 0);
+      const totalSent = Number((dispatchCount as any)?.count ?? 0);
+      const legacyViews = Number((dispatched as any)?.legacy_views ?? 0);
+      const effectiveViews = uniqueViews > 0 ? uniqueViews : legacyViews;
+
+      res.json({
+        success: true,
+        data: {
+          campaign_id: campaignId,
+          unique_views: effectiveViews,
+          total_sent: totalSent,
+          view_rate: totalSent > 0 ? Math.round((effectiveViews / totalSent) * 100) : 0,
+        },
       });
     } catch (err) { next(err); }
   }
@@ -1367,6 +1430,152 @@ clientRouter.post(
       });
 
       res.json({ success: true, message: 'החוזה נחתם בהצלחה. ברוך הבא!' });
+    } catch (err) { next(err); }
+  }
+);
+
+// ══════════════════════════════════════════════════════════════
+//  AUDIT LOG
+// ══════════════════════════════════════════════════════════════
+
+// Helper: write an audit log entry (fire-and-forget)
+export async function writeAuditLog(opts: {
+  workspaceId: string;
+  actorMemberId?: string;
+  actorEmail?: string;
+  action: string;
+  entityType?: string;
+  entityId?: string;
+  meta?: Record<string, unknown>;
+}) {
+  await db('audit_logs').insert({
+    workspace_id: opts.workspaceId,
+    actor_member_id: opts.actorMemberId ?? null,
+    actor_email: opts.actorEmail ?? null,
+    action: opts.action,
+    entity_type: opts.entityType ?? null,
+    entity_id: opts.entityId ?? null,
+    meta: JSON.stringify(opts.meta ?? {}),
+  });
+}
+
+clientRouter.get(
+  '/audit-log',
+  requirePermission('can_manage_members'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const wsId = req.workspace!.id;
+      const limit = Math.min(Number(req.query.limit ?? 50), 200);
+      const offset = Number(req.query.offset ?? 0);
+
+      const logs = await db('audit_logs as al')
+        .where('al.workspace_id', wsId)
+        .leftJoin('workspace_members as m', 'm.id', 'al.actor_member_id')
+        .select(
+          'al.id', 'al.action', 'al.entity_type', 'al.entity_id',
+          'al.actor_email', 'al.meta', 'al.created_at',
+          'm.full_name as actor_name',
+        )
+        .orderBy('al.created_at', 'desc')
+        .limit(limit)
+        .offset(offset);
+
+      const [{ count }] = await db('audit_logs').where({ workspace_id: wsId }).count('id as count');
+
+      res.json({ success: true, data: logs, total: Number(count) });
+    } catch (err) { next(err); }
+  }
+);
+
+// PATCH /members/:id/role — change member role (sub-admin management)
+clientRouter.patch(
+  '/members/:id/role',
+  requirePermission('can_manage_members'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { role_slug } = z.object({ role_slug: z.string().min(1) }).parse(req.body);
+      const wsId = req.workspace!.id;
+
+      const member = await db('workspace_members').where({ id: req.params.id, workspace_id: wsId }).first();
+      if (!member) throw new NotFoundError('Member not found');
+      if (member.is_owner) throw new AppError('Cannot change owner role', 400, 'OWNER_UNCHANGEABLE');
+
+      const role = await db('workspace_roles').where({ workspace_id: wsId, slug: role_slug }).first();
+      if (!role) throw new NotFoundError('Role not found');
+
+      await db('workspace_members').where({ id: member.id }).update({ role_id: role.id });
+
+      writeAuditLog({
+        workspaceId: wsId,
+        actorMemberId: req.member?.id,
+        actorEmail: req.member?.email,
+        action: 'member.role_changed',
+        entityType: 'member',
+        entityId: member.id,
+        meta: { new_role: role_slug, member_email: member.email },
+      }).catch(() => {});
+
+      res.json({ success: true, message: 'Role updated' });
+    } catch (err) { next(err); }
+  }
+);
+
+// GET /roles — list all roles for this workspace
+clientRouter.get(
+  '/roles',
+  requirePermission('can_manage_members'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const roles = await wsQuery(req, 'workspace_roles')
+        .select('id', 'name', 'slug', 'can_send_free', 'requires_approval', 'can_approve_messages',
+                'can_global_delete', 'can_manage_campaigns', 'can_manage_members',
+                'can_manage_destinations', 'can_view_analytics', 'can_manage_crm',
+                'can_manage_bot_settings')
+        .orderBy('name');
+      res.json({ success: true, data: roles });
+    } catch (err) { next(err); }
+  }
+);
+
+// POST /roles — create a new role (sub-admin)
+clientRouter.post(
+  '/roles',
+  requirePermission('can_manage_members'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const roleSchema = z.object({
+        name: z.string().min(1).max(50),
+        can_send_free: z.boolean().default(false),
+        requires_approval: z.boolean().default(true),
+        can_approve_messages: z.boolean().default(false),
+        can_manage_campaigns: z.boolean().default(false),
+        can_manage_members: z.boolean().default(false),
+        can_manage_destinations: z.boolean().default(false),
+        can_view_analytics: z.boolean().default(false),
+        can_manage_crm: z.boolean().default(false),
+        can_manage_bot_settings: z.boolean().default(false),
+      });
+
+      const body = roleSchema.parse(req.body);
+      const wsId = req.workspace!.id;
+      const slug = body.name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+
+      const existing = await db('workspace_roles').where({ workspace_id: wsId, slug }).first();
+      if (existing) throw new AppError('Role with this name already exists', 409, 'ROLE_EXISTS');
+
+      const [role] = await db('workspace_roles').insert({ workspace_id: wsId, slug, ...body }).returning('*');
+
+      writeAuditLog({
+        workspaceId: wsId,
+        actorMemberId: req.member?.id,
+        actorEmail: req.member?.email,
+        action: 'role.created',
+        entityType: 'role',
+        entityId: role.id,
+        meta: { name: body.name },
+      }).catch(() => {});
+
+      res.status(201).json({ success: true, data: role });
     } catch (err) { next(err); }
   }
 );

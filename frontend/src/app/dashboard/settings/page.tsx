@@ -1215,6 +1215,25 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* ═══ Team & Audit Log ═══ */}
+      <Card glass className={glassCard}>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Users className="h-5 w-5 text-primary" />
+              ניהול צוות ותפקידים
+            </CardTitle>
+            <a href="/dashboard/settings/team">
+              <Button variant="ghost" size="sm" className="gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                נהל את הצוות
+                <span className="text-base">←</span>
+              </Button>
+            </a>
+          </div>
+          <CardDescription>הגדר תפקידים, נהל הרשאות וצפה ביומן פעולות</CardDescription>
+        </CardHeader>
+      </Card>
+
       {/* ═══ G) Feature Requests ═══ */}
       <Card glass className={glassCard}>
         <CardHeader>

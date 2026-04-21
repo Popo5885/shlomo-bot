@@ -15,6 +15,8 @@ import { AuthError, AppError } from '../utils/errors.js';
 import {
   sendWelcomeEmail,
   sendOwnerNewSignupNotification,
+  sendPasswordResetEmail,
+  sendPendingApprovalEmail,
 } from '../services/email/emailService.js';
 
 export const clientLoginRouter = Router();
@@ -32,7 +34,6 @@ const registerSchema = z.object({
 });
 
 const signupSchema = z.object({
-  business_name: z.string().min(1).max(100),
   full_name: z.string().min(1).max(100),
   email: z.string().email(),
   phone: z.string().min(7).max(20),
@@ -110,6 +111,7 @@ clientLoginRouter.post(
       // Send emails (fire-and-forget — don't block the response)
       sendWelcomeEmail({ to: email, fullName: full_name, businessName: business_name }).catch(() => {});
       sendOwnerNewSignupNotification({ fullName: full_name, businessName: business_name, email, phone }).catch(() => {});
+      sendPendingApprovalEmail({ to: email, fullName: full_name }).catch(() => {});
 
       res.status(201).json({
         success: true,
@@ -313,6 +315,73 @@ clientLoginRouter.post(
           },
         },
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /api/client/forgot-password — send password reset email
+clientLoginRouter.post(
+  '/forgot-password',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { email } = z.object({ email: z.string().email() }).parse(req.body);
+
+      const member = await db('workspace_members').where({ email: email.toLowerCase() }).first();
+
+      // Always return 200 to prevent email enumeration
+      if (!member) {
+        res.json({ success: true, message: 'אם הכתובת קיימת, נשלח אליה קישור לאיפוס סיסמה.' });
+        return;
+      }
+
+      const resetToken = jwt.sign(
+        { sub: member.id, purpose: 'password_reset' },
+        env.JWT_SECRET,
+        { expiresIn: '15m' } as jwt.SignOptions
+      );
+
+      sendPasswordResetEmail({ to: email, fullName: member.full_name, resetToken }).catch(() => {});
+
+      res.json({ success: true, message: 'אם הכתובת קיימת, נשלח אליה קישור לאיפוס סיסמה.' });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /api/client/reset-password — verify JWT token and set new password
+clientLoginRouter.post(
+  '/reset-password',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { token, password } = z.object({
+        token: z.string().min(1),
+        password: z.string().min(6),
+      }).parse(req.body);
+
+      let payload: { sub: string; purpose: string };
+      try {
+        payload = jwt.verify(token, env.JWT_SECRET) as typeof payload;
+      } catch {
+        throw new AppError('הקישור אינו תקין או שפג תוקפו', 400, 'INVALID_TOKEN');
+      }
+
+      if (payload.purpose !== 'password_reset') {
+        throw new AppError('טוקן לא תקין', 400, 'INVALID_TOKEN');
+      }
+
+      const password_hash = await bcrypt.hash(password, 12);
+      const updated = await db('workspace_members')
+        .where({ id: payload.sub })
+        .update({ password_hash });
+
+      if (!updated) {
+        throw new AppError('המשתמש לא נמצא', 404, 'NOT_FOUND');
+      }
+
+      res.json({ success: true, message: 'הסיסמה עודכנה בהצלחה.' });
     } catch (err) {
       next(err);
     }

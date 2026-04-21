@@ -11,6 +11,7 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import Knex from 'knex';
+import passport from 'passport';
 
 import { env } from './config/env.js';
 import { logger } from './utils/logger.js';
@@ -21,6 +22,7 @@ import { emailAdminRouter } from './routes/emailAdmin.routes.js';
 import { emailPublicRouter } from './routes/emailPublic.routes.js';
 import { clientLoginRouter } from './routes/clientLogin.routes.js';
 import { clientRouter } from './routes/client.routes.js';
+import { googleAuthRouter } from './routes/googleAuth.routes.js';
 import { sessionManager } from './services/whatsapp/sessionManager.js';
 import { restoreAllTelegramBots } from './services/telegram/telegramBot.js';
 import { attachWebSocket } from './websocket.js';
@@ -47,6 +49,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
+app.use(passport.initialize());
 
 // ── Health Check ──
 app.get('/health', (_req, res) => {
@@ -66,6 +69,7 @@ app.use('/api/admin', emailAdminRouter);
 app.use('/api/email', emailPublicRouter);
 app.use('/api/client', clientLoginRouter); // Public (login — no auth)
 app.use('/api/client', clientRouter);     // Protected (requires JWT)
+app.use('/api/auth', googleAuthRouter);   // Google OAuth2
 
 // ── Error Handler (must be last) ──
 app.use(errorHandler);

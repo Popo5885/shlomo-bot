@@ -23,6 +23,7 @@ import {
   sendApprovalEmail,
   sendRejectionEmail,
   sendReceiptEmail,
+  sendAccountApprovedEmail,
 } from '../services/email/emailService.js';
 
 /** Safely extract a single string from Express query params */
@@ -540,6 +541,18 @@ superAdminRouter.patch(
       const { status } = schema.parse(req.body);
       const updated = await db('workspaces').where({ id: req.params.id as string }).update({ status, updated_at: db.fn.now() });
       if (!updated) throw new NotFoundError('Workspace not found');
+
+      // Notify owner when workspace transitions to active
+      if (status === 'active') {
+        const owner = await db('workspace_members')
+          .where({ workspace_id: req.params.id as string, is_owner: true })
+          .select('email', 'full_name')
+          .first();
+        if (owner) {
+          sendAccountApprovedEmail({ to: owner.email, fullName: owner.full_name, workspaceId: req.params.id as string }).catch(() => {});
+        }
+      }
+
       res.json({ success: true, message: `Workspace status set to ${status}` });
     } catch (err) { next(err); }
   }
@@ -634,9 +647,9 @@ superAdminRouter.post(
 
       // Send receipt email to workspace owner
       const owner = await db('workspace_members')
-        .where({ workspace_id: workspace.id, role: 'owner' })
+        .where({ workspace_id: workspace.id, is_owner: true })
         .whereNotNull('email')
-        .first('email');
+        .first('email', 'full_name');
       if (owner?.email) {
         const baseUrl = (process.env.FRONTEND_URL || 'http://localhost:3001').split(',')[0].trim();
         const downloadUrl = `${baseUrl.replace('3001', '3000')}/api/admin/invoices/${invoice.id}/download`;

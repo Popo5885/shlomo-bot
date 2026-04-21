@@ -114,6 +114,42 @@ export interface Workspace {
   plan: "trial" | "starter" | "pro" | "enterprise";
   plan_limits: Record<string, unknown>;
   is_active: boolean;
+  status: "pending" | "active" | "suspended";
+  contract_signed: boolean;
+  contract_signed_at: string | null;
+  contract_version: string | null;
+  contract_document_url: string | null;
+  contract_revoked_at: string | null;
+}
+
+export interface Invoice {
+  id: string;
+  workspace_id: string;
+  invoice_number: string;
+  amount: number;
+  currency: string;
+  status: string;
+  description: string | null;
+  issued_at: string;
+  pdf_url: string | null;
+  has_file: boolean;
+}
+
+export interface AdminWorkspace {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  status: "pending" | "active" | "suspended";
+  is_active: boolean;
+  contact_phone: string | null;
+  created_at: string;
+  contract_signed: boolean;
+  contract_signed_at: string | null;
+  contract_version: string | null;
+  contract_revoked_at: string | null;
+  owner_email: string | null;
+  owner_name: string | null;
 }
 
 export interface WorkspaceMember {
@@ -191,6 +227,7 @@ export interface DestinationViews {
 export interface BestSendTimeData {
   hourly: HourlyStat[];
   best_hour: number | null;
+  best_view_rate: number | null;
   best_success_rate: number | null;
 }
 
@@ -199,6 +236,8 @@ export interface HourlyStat {
   total_sent: number;
   total_delivered: number;
   total_views: number;
+  actual_views: number;
+  view_rate: number;
   success_rate: number;
 }
 

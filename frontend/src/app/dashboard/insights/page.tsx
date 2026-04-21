@@ -70,6 +70,8 @@ export default function InsightsPage() {
       total_sent: found?.total_sent ?? 0,
       success_rate: found?.success_rate ?? 0,
       total_views: found?.total_views ?? 0,
+      actual_views: found?.actual_views ?? 0,
+      view_rate: found?.view_rate ?? 0,
       isBest: sendTimeData?.best_hour === h,
     };
   });

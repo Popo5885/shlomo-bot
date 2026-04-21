@@ -38,12 +38,33 @@ export function attachMessageListener(
         // Status 4 = READ by recipient
         if (update.update?.status === 4 && update.key?.id) {
           const platformMsgId = update.key.id;
+          const recipientJid = update.key.remoteJid ?? 'unknown';
+
           const updated = await db('message_dispatches')
             .where({ platform_msg_id: platformMsgId })
             .increment('views_count', 1);
 
           if (updated > 0) {
             logger.debug(`Views incremented for platform_msg_id=${platformMsgId}`);
+
+            // Record unique view in message_views for analytics
+            const dispatch = await db('message_dispatches')
+              .where({ platform_msg_id: platformMsgId })
+              .select('workspace_id', 'campaign_id')
+              .first();
+
+            if (dispatch) {
+              await db('message_views')
+                .insert({
+                  workspace_id: dispatch.workspace_id,
+                  campaign_id: dispatch.campaign_id ?? null,
+                  wa_message_id: platformMsgId,
+                  recipient_jid: recipientJid,
+                  viewed_at: db.fn.now(),
+                })
+                .onConflict(['wa_message_id', 'recipient_jid'])
+                .ignore();
+            }
           }
         }
       } catch (err) {

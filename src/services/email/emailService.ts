@@ -399,3 +399,59 @@ export async function sendReceiptEmail(opts: {
 
   await sendMail({ to, subject, html: htmlWrapper(body, to), templateName: 'receipt', workspaceId });
 }
+
+/** 7. Password reset email */
+export async function sendPasswordResetEmail(opts: {
+  to: string;
+  fullName: string;
+  resetToken: string;
+}): Promise<void> {
+  const { to, fullName, resetToken } = opts;
+  const resetUrl = `${frontendUrl()}/reset-password?token=${encodeURIComponent(resetToken)}`;
+
+  const body = `<h2 style="margin:0 0 16px;color:#111827;font-size:22px;font-weight:700;">שלום ${fullName},</h2>
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.7;">קיבלנו בקשה לאיפוס הסיסמה שלך. לחץ על הכפתור למטה להגדרת סיסמה חדשה:</p>
+    ${actionButton('איפוס סיסמה →', resetUrl)}
+    <p style="margin:0;color:#9ca3af;font-size:13px;text-align:center;">הקישור תקף ל-15 דקות בלבד. אם לא ביקשת איפוס, התעלם מהודעה זו.</p>`;
+
+  await sendMail({ to, subject: '🔐 איפוס סיסמה — GroupPulse', html: htmlWrapper(body, to), templateName: 'password_reset' });
+}
+
+/** 8. Account pending approval notification to user */
+export async function sendPendingApprovalEmail(opts: {
+  to: string;
+  fullName: string;
+}): Promise<void> {
+  const { to, fullName } = opts;
+
+  const body = `<h2 style="margin:0 0 16px;color:#111827;font-size:22px;font-weight:700;">שלום ${fullName}! 👋</h2>
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.7;">הרשמתך התקבלה בהצלחה ✅</p>
+    <p style="margin:0 0 24px;color:#374151;font-size:15px;line-height:1.7;">
+      החשבון שלך נמצא כעת בבדיקה ויאושר בהקדם על ידי הצוות שלנו.<br/>
+      נעדכן אותך במייל ברגע שהחשבון מוכן לשימוש.
+    </p>
+    <div style="background:#eff6ff;border-right:4px solid #3b82f6;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
+      <p style="margin:0;color:#1e40af;font-size:14px;">⏱️ זמן אישור ממוצע: עד 24 שעות עסקיות</p>
+    </div>
+    <p style="margin:0;color:#6b7280;font-size:14px;">לשאלות — השב למייל זה או שלח לנו ב-WhatsApp.</p>`;
+
+  await sendMail({ to, subject: '⏳ הרשמתך התקבלה — ממתין לאישור', html: htmlWrapper(body, to), templateName: 'pending_approval' });
+}
+
+/** 9. Account approved — notify user they can start */
+export async function sendAccountApprovedEmail(opts: {
+  to: string;
+  fullName: string;
+  workspaceId?: string;
+}): Promise<void> {
+  const { to, fullName, workspaceId } = opts;
+
+  const body = `<h2 style="margin:0 0 16px;color:#111827;font-size:22px;font-weight:700;">מזל טוב ${fullName}! 🎉</h2>
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.7;">החשבון שלך ב-GroupPulse <strong>אושר</strong> ומוכן לשימוש!</p>
+    <p style="margin:0 0 24px;color:#374151;font-size:15px;line-height:1.7;">
+      כעת תוכל להתחבר ולהתחיל לנהל את הקהילות שלך, לשלוח הודעות ולצפות בסטטיסטיקות.
+    </p>
+    ${actionButton('התחבר עכשיו →', `${frontendUrl()}/login`)}`;
+
+  await sendMail({ to, subject: '✅ החשבון שלך אושר — ברוך הבא ל-GroupPulse!', html: htmlWrapper(body, to), templateName: 'account_approved', workspaceId });
+}
