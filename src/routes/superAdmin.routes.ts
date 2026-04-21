@@ -22,6 +22,7 @@ import { NotFoundError } from '../utils/errors.js';
 import {
   sendApprovalEmail,
   sendRejectionEmail,
+  sendReceiptEmail,
 } from '../services/email/emailService.js';
 
 /** Safely extract a single string from Express query params */
@@ -517,12 +518,15 @@ superAdminRouter.get(
 
       if (!workspace) throw new NotFoundError('Workspace not found');
 
-      const [connectedAccounts, invoices] = await Promise.all([
+      const [connectedAccounts, invoices, members] = await Promise.all([
         db('connected_accounts').where({ workspace_id: workspace.id }).select('id', 'platform', 'display_name', 'is_connected', 'connection_status', 'connection_token'),
         db('invoices').where({ workspace_id: workspace.id }).select('id', 'invoice_number', 'amount', 'currency', 'status', 'description', 'issued_at').orderBy('issued_at', 'desc'),
+        db('workspace_members').where({ workspace_id: workspace.id })
+          .select('id', 'email', 'full_name', 'is_owner', 'is_active', 'email_notifications_enabled', 'approval_status')
+          .orderBy('is_owner', 'desc'),
       ]);
 
-      res.json({ success: true, data: { ...workspace, connected_accounts: connectedAccounts, invoices } });
+      res.json({ success: true, data: { ...workspace, connected_accounts: connectedAccounts, invoices, members } });
     } catch (err) { next(err); }
   }
 );
@@ -627,6 +631,26 @@ superAdminRouter.post(
         uploaded_by: req.superAdmin!.email,
         status: 'paid',
       }).returning('*');
+
+      // Send receipt email to workspace owner
+      const owner = await db('workspace_members')
+        .where({ workspace_id: workspace.id, role: 'owner' })
+        .whereNotNull('email')
+        .first('email');
+      if (owner?.email) {
+        const baseUrl = (process.env.FRONTEND_URL || 'http://localhost:3001').split(',')[0].trim();
+        const downloadUrl = `${baseUrl.replace('3001', '3000')}/api/admin/invoices/${invoice.id}/download`;
+        sendReceiptEmail({
+          to: owner.email,
+          invoiceNumber: invoice.invoice_number,
+          description: invoice.description || 'שירותי GroupPulse',
+          amount: invoice.amount,
+          currency: invoice.currency,
+          issuedAt: invoice.issued_at || new Date().toISOString(),
+          downloadUrl,
+          workspaceId: workspace.id,
+        }).catch(() => {}); // fire-and-forget
+      }
 
       res.status(201).json({ success: true, data: invoice });
     } catch (err) { next(err); }

@@ -23,6 +23,8 @@ import {
   BellRing,
   Phone,
   Timer,
+  MailX,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -158,6 +160,10 @@ export default function SettingsPage() {
   const [featureLoading, setFeatureLoading] = useState(true);
   const [featureSubmitting, setFeatureSubmitting] = useState(false);
 
+  // Email status state
+  const [emailStatus, setEmailStatus] = useState<{ unsubscribed: boolean; notifications_enabled: boolean; email?: string } | null>(null);
+  const [resubscribing, setResubscribing] = useState(false);
+
   // Queue management state
   const [pausedCount, setPausedCount] = useState(0);
   const [queueLoading, setQueueLoading] = useState(true);
@@ -223,6 +229,21 @@ export default function SettingsPage() {
       .catch(() => {})
       .finally(() => setFeatureLoading(false));
   }, []);
+
+  /* ─── Load email status ─── */
+  useEffect(() => {
+    api.get<{ unsubscribed: boolean; notifications_enabled: boolean; email?: string }>("/api/client/email-status")
+      .then(setEmailStatus)
+      .catch(() => {});
+  }, []);
+
+  const handleResubscribe = async () => {
+    setResubscribing(true);
+    try {
+      await api.post("/api/client/email-resubscribe", {});
+      setEmailStatus((prev) => prev ? { ...prev, unsubscribed: false } : prev);
+    } catch { /* silent */ } finally { setResubscribing(false); }
+  };
 
   /* ─── Load queue paused info ─── */
   useEffect(() => {
@@ -434,6 +455,39 @@ export default function SettingsPage() {
         <h1 className="text-2xl font-bold tracking-tight">הגדרות</h1>
         <p className="text-muted-foreground">נהל את הגדרות סביבת העבודה שלך</p>
       </div>
+
+      {/* Email notification status banner */}
+      {emailStatus && (emailStatus.unsubscribed || !emailStatus.notifications_enabled) && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-4">
+          <MailX className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
+          <div className="flex-1">
+            {emailStatus.unsubscribed && (
+              <>
+                <p className="text-sm font-semibold text-amber-300">אינך מקבל עדכונים במייל</p>
+                <p className="text-xs text-amber-400/80 mt-0.5">
+                  הכתובת {emailStatus.email} הוסרה מרשימת התפוצה. לחץ להרשמה מחדש.
+                </p>
+                <button
+                  onClick={handleResubscribe}
+                  disabled={resubscribing}
+                  className="mt-2 inline-flex items-center gap-1.5 text-xs text-amber-300 hover:text-amber-100 underline underline-offset-2"
+                >
+                  {resubscribing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                  הרשמה מחדש לקבלת עדכונים
+                </button>
+              </>
+            )}
+            {!emailStatus.unsubscribed && !emailStatus.notifications_enabled && (
+              <>
+                <p className="text-sm font-semibold text-amber-300">הודעות אוטומטיות מושבתות</p>
+                <p className="text-xs text-amber-400/80 mt-0.5">
+                  האדמין השבית שליחת מיילים אוטומטיים לחשבון זה. ניתן לפנות לתמיכה להפעלה מחדש.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ═══ A) Workspace Info ═══ */}
       <Card glass className={glassCard}>

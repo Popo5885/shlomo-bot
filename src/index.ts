@@ -2,27 +2,34 @@
  * HTTP Server — Entry Point
  *
  * Serves the API for the client dashboard and admin panel.
- * Runs as an independent process from the Worker.
+ * Also runs the BullMQ dispatch worker in-process so a second terminal
+ * is not required for development.
  */
 
 import { createServer } from 'node:http';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
+import Knex from 'knex';
 
 import { env } from './config/env.js';
 import { logger } from './utils/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { whatsappAuthRouter } from './routes/whatsappAuth.routes.js';
 import { superAdminRouter } from './routes/superAdmin.routes.js';
+import { emailAdminRouter } from './routes/emailAdmin.routes.js';
+import { emailPublicRouter } from './routes/emailPublic.routes.js';
 import { clientLoginRouter } from './routes/clientLogin.routes.js';
 import { clientRouter } from './routes/client.routes.js';
 import { sessionManager } from './services/whatsapp/sessionManager.js';
 import { restoreAllTelegramBots } from './services/telegram/telegramBot.js';
 import { attachWebSocket } from './websocket.js';
+import { createDispatchWorker } from './workers/messageDispatchWorker.js';
+import type { Worker } from 'bullmq';
 
 const app = express();
 const httpServer = createServer(app);
+let inProcessWorker: Worker | null = null;
 
 // ── Global Middleware ──
 app.use(helmet());
@@ -48,28 +55,70 @@ app.get('/health', (_req, res) => {
     service: 'api-server',
     uptime: process.uptime(),
     activeSessions: sessionManager.activeCount,
+    inProcessWorker: inProcessWorker !== null,
   });
 });
 
 // ── Routes ──
 app.use('/api/wa', whatsappAuthRouter);
 app.use('/api/admin', superAdminRouter);
+app.use('/api/admin', emailAdminRouter);
+app.use('/api/email', emailPublicRouter);
 app.use('/api/client', clientLoginRouter); // Public (login — no auth)
 app.use('/api/client', clientRouter);     // Protected (requires JWT)
 
 // ── Error Handler (must be last) ──
 app.use(errorHandler);
 
+// ── Auto-run pending migrations ──
+async function runMigrations(): Promise<void> {
+  const knex = Knex({
+    client: 'pg',
+    connection: process.env.DATABASE_URL,
+    migrations: {
+      directory: new URL('./db/migrations', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'),
+      extension: 'ts',
+    },
+  });
+  try {
+    const [batch, list] = await knex.migrate.latest();
+    if (list.length > 0) {
+      logger.info(`Migrations applied (batch ${batch}): ${list.join(', ')}`);
+    } else {
+      logger.info('Database schema is up to date');
+    }
+  } catch (err) {
+    logger.error('Migration failed:', err);
+    // Don't exit — server may still work on existing schema
+  } finally {
+    await knex.destroy();
+  }
+}
+
 // ── Startup ──
 async function start(): Promise<void> {
-  // Restore WhatsApp sessions that were connected before restart
+  // 0. Run any pending migrations first
+  await runMigrations();
+
+  // 1. Restore WhatsApp sessions
   await sessionManager.restoreAllSessions();
 
-  // Restore Telegram bots that were connected before restart
+  // 2. Restore Telegram bots
   await restoreAllTelegramBots();
 
-  // Attach WebSocket server for real-time QR + status updates
+  // 3. Attach WebSocket server
   attachWebSocket(httpServer);
+
+  // 4. Start BullMQ dispatch worker in-process (concurrency=2)
+  //    This means the HTTP server also processes the send queue —
+  //    no separate `npm run dev:worker` required.
+  try {
+    inProcessWorker = createDispatchWorker(2);
+    logger.info('In-process BullMQ dispatch worker started (concurrency: 2)');
+  } catch (err) {
+    // Redis not available — worker disabled, manual sends won't work
+    logger.warn('BullMQ worker could not start (Redis unavailable?). Queue processing disabled.', err);
+  }
 
   httpServer.listen(env.PORT, () => {
     logger.info(`API Server running on port ${env.PORT} (${env.NODE_ENV})`);
@@ -85,6 +134,9 @@ start().catch((err) => {
 // ── Graceful Shutdown ──
 async function shutdown(signal: string): Promise<void> {
   logger.info(`${signal} received — shutting down API server...`);
+  if (inProcessWorker) {
+    await inProcessWorker.close();
+  }
   await sessionManager.disconnectAll();
   httpServer.close();
   process.exit(0);
@@ -92,3 +144,11 @@ async function shutdown(signal: string): Promise<void> {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// ── Zero-crash: log unhandled errors but don't die ──
+process.on('uncaughtException', (err) => {
+  logger.error('UNCAUGHT EXCEPTION (process will continue):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error('UNHANDLED REJECTION (process will continue):', reason);
+});

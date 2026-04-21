@@ -14,6 +14,7 @@ import { db } from '../config/database.js';
 import { triggerCampaign, cancelCampaign } from '../services/triggers/campaignTrigger.js';
 import { connectTelegramBot, disconnectTelegramBot, syncTelegramGroups } from '../services/telegram/telegramBot.js';
 import { NotFoundError, AppError } from '../utils/errors.js';
+import { removeUnsubscribe } from '../services/email/emailService.js';
 
 export const clientRouter = Router();
 
@@ -1293,6 +1294,47 @@ clientRouter.get(
           conversions,
         },
       });
+    } catch (err) { next(err); }
+  }
+);
+
+// GET /email-status — returns unsubscribe + notification state for the current member
+clientRouter.get(
+  '/email-status',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const member = await db('workspace_members')
+        .where({ id: req.member!.id })
+        .first('email', 'email_notifications_enabled');
+
+      if (!member) { res.json({ success: true, data: { unsubscribed: false, notifications_enabled: true } }); return; }
+
+      const unsub = await db('email_unsubscribes')
+        .where({ email: (member.email ?? '').toLowerCase() })
+        .first();
+
+      res.json({
+        success: true,
+        data: {
+          unsubscribed: !!unsub,
+          notifications_enabled: member.email_notifications_enabled ?? true,
+          email: member.email,
+        },
+      });
+    } catch (err) { next(err); }
+  }
+);
+
+// POST /email-resubscribe — authenticated resubscribe (removes from unsubscribes)
+clientRouter.post(
+  '/email-resubscribe',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const member = await db('workspace_members')
+        .where({ id: req.member!.id })
+        .first('email');
+      if (member?.email) await removeUnsubscribe(member.email);
+      res.json({ success: true });
     } catch (err) { next(err); }
   }
 );
