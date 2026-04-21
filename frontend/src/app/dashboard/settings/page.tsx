@@ -20,6 +20,9 @@ import {
   Lightbulb,
   ListRestart,
   Send,
+  BellRing,
+  Phone,
+  Timer,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -126,6 +129,25 @@ export default function SettingsPage() {
   const [shabbatLoading, setShabbatLoading] = useState(true);
   const [shabbatSaving, setShabbatSaving] = useState(false);
 
+  // Auto-reply state
+  interface AutoReplySettings {
+    is_enabled: boolean;
+    greeting_text: string;
+    send_lead_notification: boolean;
+    notification_phone: string | null;
+    cooldown_minutes: number;
+  }
+  const [autoReply, setAutoReply] = useState<AutoReplySettings>({
+    is_enabled: false,
+    greeting_text: "שלום! קיבלנו את הודעתך ונחזור אליך בהקדם 😊",
+    send_lead_notification: true,
+    notification_phone: null,
+    cooldown_minutes: 60,
+  });
+  const [autoReplyLoading, setAutoReplyLoading] = useState(true);
+  const [autoReplySaving, setAutoReplySaving] = useState(false);
+  const [autoReplySaved, setAutoReplySaved] = useState(false);
+
   // Invoices state
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [invoicesLoading, setInvoicesLoading] = useState(true);
@@ -175,6 +197,15 @@ export default function SettingsPage() {
       .finally(() => setShabbatLoading(false));
   }, []);
 
+  /* ─── Load auto-reply settings ─── */
+  useEffect(() => {
+    api
+      .get<AutoReplySettings>("/api/client/auto-reply-settings")
+      .then((s) => setAutoReply(s))
+      .catch(() => {})
+      .finally(() => setAutoReplyLoading(false));
+  }, []);
+
   /* ─── Load invoices ─── */
   useEffect(() => {
     api
@@ -213,6 +244,19 @@ export default function SettingsPage() {
       navigator.clipboard.writeText(workspace.id);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const saveAutoReply = async () => {
+    setAutoReplySaving(true);
+    try {
+      await api.patch("/api/client/auto-reply-settings", autoReply);
+      setAutoReplySaved(true);
+      setTimeout(() => setAutoReplySaved(false), 3000);
+    } catch {
+      // keep saving=false, user will see no feedback which is acceptable
+    } finally {
+      setAutoReplySaving(false);
     }
   };
 
@@ -527,7 +571,162 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* ═══ D) Group Access Manager ═══ */}
+      {/* ═══ D) Auto-Reply & Lead Notifications ═══ */}
+      <Card glass className={glassCard}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <BellRing className="h-5 w-5 text-primary" />
+            מענה אוטומטי + התראות לידים
+          </CardTitle>
+          <CardDescription>
+            שלח הודעת פתיחה אוטומטית לכל מי שפונה אליך בפרטי, וקבל התראה מיידית על כל ליד חדש
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {autoReplyLoading ? (
+            <div className="flex justify-center py-6">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {/* Enable toggle */}
+              <div className="flex items-center justify-between rounded-lg border border-border/50 bg-background/50 p-4">
+                <div>
+                  <p className="text-sm font-medium">
+                    {autoReply.is_enabled ? "מענה אוטומטי פעיל" : "מענה אוטומטי כבוי"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    הפעל כדי לשלוח הודעת ברוכים הבאים לפונים חדשים
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoReply((p) => ({ ...p, is_enabled: !p.is_enabled }))}
+                  className={`relative h-7 w-12 rounded-full transition-colors duration-200 ${
+                    autoReply.is_enabled ? "bg-emerald-500" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                      autoReply.is_enabled ? "translate-x-0.5" : "translate-x-5"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Greeting text */}
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                  טקסט הודעת פתיחה
+                </label>
+                <textarea
+                  rows={3}
+                  value={autoReply.greeting_text}
+                  onChange={(e) => setAutoReply((p) => ({ ...p, greeting_text: e.target.value }))}
+                  placeholder="שלום! קיבלנו את הודעתך ונחזור אליך בהקדם 😊"
+                  className="w-full resize-none rounded-xl border border-border/60 bg-background/60 px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+
+              {/* Lead notification toggle */}
+              <div className="flex items-center justify-between rounded-lg border border-border/50 bg-background/50 p-4">
+                <div>
+                  <p className="text-sm font-medium">
+                    התראה על ליד חדש
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    שלח הודעת וואטסאפ לבעל המערכת בכל פנייה חדשה
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoReply((p) => ({ ...p, send_lead_notification: !p.send_lead_notification }))}
+                  className={`relative h-7 w-12 rounded-full transition-colors duration-200 ${
+                    autoReply.send_lead_notification ? "bg-blue-500" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                      autoReply.send_lead_notification ? "translate-x-0.5" : "translate-x-5"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Notification phone override */}
+              {autoReply.send_lead_notification && (
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-medium">
+                    <Phone className="h-4 w-4 text-muted-foreground" />
+                    מספר לקבלת התראות
+                    <span className="text-xs font-normal text-muted-foreground">(ריק = מספר הקשר של הסביבה)</span>
+                  </label>
+                  <Input
+                    type="tel"
+                    dir="ltr"
+                    value={autoReply.notification_phone ?? ""}
+                    onChange={(e) =>
+                      setAutoReply((p) => ({
+                        ...p,
+                        notification_phone: e.target.value || null,
+                      }))
+                    }
+                    placeholder="972501234567"
+                    className="font-mono text-sm"
+                  />
+                </div>
+              )}
+
+              {/* Cooldown */}
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <Timer className="h-4 w-4 text-muted-foreground" />
+                  זמן מנוחה בין מענה לאותו מספר
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={5}
+                    max={1440}
+                    step={5}
+                    value={autoReply.cooldown_minutes}
+                    onChange={(e) =>
+                      setAutoReply((p) => ({ ...p, cooldown_minutes: Number(e.target.value) }))
+                    }
+                    className="flex-1 accent-primary"
+                  />
+                  <span className="w-24 text-left text-sm font-medium tabular-nums text-muted-foreground">
+                    {autoReply.cooldown_minutes >= 60
+                      ? `${Math.round(autoReply.cooldown_minutes / 60)}ש׳`
+                      : `${autoReply.cooldown_minutes} דק׳`}
+                  </span>
+                </div>
+              </div>
+
+              {/* Save button */}
+              <Button
+                onClick={saveAutoReply}
+                disabled={autoReplySaving}
+                className="w-full bg-gradient-to-r from-blue-500 to-blue-700 shadow-sm"
+              >
+                {autoReplySaving ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : autoReplySaved ? (
+                  <>
+                    <Check className="h-4 w-4" />
+                    נשמר!
+                  </>
+                ) : (
+                  "שמור הגדרות"
+                )}
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ═══ E) Group Access Manager ═══ */}
       {canManageMembers && (
         <Card glass className={glassCard}>
           <CardHeader>
@@ -725,7 +924,7 @@ export default function SettingsPage() {
         </Card>
       )}
 
-      {/* ═══ E) Add User ═══ */}
+      {/* ═══ F) Add User ═══ */}
       {canManageMembers && (
         <Card glass className={glassCard}>
           <CardHeader>
@@ -888,10 +1087,18 @@ export default function SettingsPage() {
       {/* ═══ F) Invoices ═══ */}
       <Card glass className={glassCard}>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <FileText className="h-5 w-5 text-primary" />
-            קבלות וחשבוניות
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <FileText className="h-5 w-5 text-primary" />
+              קבלות וחשבוניות
+            </CardTitle>
+            <a href="/dashboard/settings/receipts">
+              <Button variant="ghost" size="sm" className="gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                צפה בכל הקבלות
+                <span className="text-base">←</span>
+              </Button>
+            </a>
+          </div>
         </CardHeader>
         <CardContent>
           {invoicesLoading ? (
@@ -911,6 +1118,7 @@ export default function SettingsPage() {
                     <th className="py-2 px-3 text-right font-medium">סכום</th>
                     <th className="py-2 px-3 text-right font-medium">סטטוס</th>
                     <th className="py-2 px-3 text-right font-medium">תאריך</th>
+                    <th className="py-2 px-3 text-right font-medium">הורדה</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -935,6 +1143,14 @@ export default function SettingsPage() {
                       </td>
                       <td className="py-3 px-3 text-muted-foreground">
                         {new Date(inv.issued_at).toLocaleDateString("he-IL")}
+                      </td>
+                      <td className="py-3 px-3">
+                        <a href="/dashboard/settings/receipts">
+                          <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs text-muted-foreground hover:text-primary">
+                            <FileText className="h-3 w-3" />
+                            פרטים
+                          </Button>
+                        </a>
                       </td>
                     </tr>
                   ))}

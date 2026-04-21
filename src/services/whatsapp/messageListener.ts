@@ -54,12 +54,18 @@ export function attachMessageListener(
 
   // ── Incoming message handler ──
   socket.ev.on('messages.upsert', async (event: { messages: WAMessage[]; type: MessageUpsertType }) => {
+    logger.info(`[WA] messages.upsert: type=${event.type} count=${event.messages.length} account=${accountId}`);
+
     // Only process real-time messages, not history sync
     if (event.type !== 'notify') return;
 
     for (const msg of event.messages) {
+      const jid = msg.key?.remoteJid ?? 'unknown';
+      const fromMe = msg.key?.fromMe ?? false;
+      logger.info(`[WA] message from=${jid} fromMe=${fromMe} id=${msg.key?.id}`);
+
       try {
-        await handleMessage(msg, accountId, workspaceId);
+        await handleMessage(msg, socket, accountId, workspaceId);
       } catch (err) {
         logger.error(`Message handler error (account: ${accountId}):`, err);
 
@@ -84,14 +90,69 @@ export function attachMessageListener(
   logger.info(`Message listener attached for account ${accountId}`);
 }
 
+/**
+ * Persist a raw message to wa_messages so the Chat view can display it.
+ * Called for ALL messages (including fromMe) before any business logic.
+ */
+async function persistMessage(msg: WAMessage, accountId: string, workspaceId: string): Promise<void> {
+  try {
+    const jid = msg.key.remoteJid;
+    if (!jid || jid === 'status@broadcast') return;
+
+    const m = msg.message;
+    if (!m) return;
+
+    let contentType = 'text';
+    let textContent: string | null = null;
+
+    if (m.conversation) { textContent = m.conversation; }
+    else if (m.extendedTextMessage?.text) { textContent = m.extendedTextMessage.text; }
+    else if (m.imageMessage) { contentType = 'image'; textContent = m.imageMessage.caption ?? null; }
+    else if (m.videoMessage) { contentType = 'video'; textContent = m.videoMessage.caption ?? null; }
+    else if (m.documentMessage) { contentType = 'document'; textContent = m.documentMessage.caption ?? null; }
+    else if (m.audioMessage) { contentType = 'audio'; }
+    else if (m.stickerMessage) { contentType = 'sticker'; }
+    else if ((m as any).pollCreationMessage) { contentType = 'poll'; textContent = (m as any).pollCreationMessage.name ?? null; }
+    else { contentType = 'other'; }
+
+    const senderJid = msg.key.fromMe
+      ? null
+      : (msg.key.participant ?? msg.key.remoteJid ?? null);
+
+    const ts = msg.messageTimestamp
+      ? new Date(Number(msg.messageTimestamp) * 1000)
+      : new Date();
+
+    await db('wa_messages').insert({
+      workspace_id: workspaceId,
+      account_id: accountId,
+      jid,
+      message_id: msg.key.id ?? `${Date.now()}`,
+      sender_jid: senderJid,
+      sender_name: (msg as any).pushName ?? null,
+      content_type: contentType,
+      text_content: textContent,
+      is_from_me: msg.key.fromMe ?? false,
+      ts,
+    }).onConflict(['account_id', 'message_id']).ignore();
+  } catch (err) {
+    // Never crash the listener for a persistence error
+    logger.error(`wa_messages persist error (account=${accountId}):`, err);
+  }
+}
+
 async function handleMessage(
   msg: WAMessage,
+  socket: WASocket,
   accountId: string,
   workspaceId: string
 ): Promise<void> {
-  // ── Filter out irrelevant messages ──
+  // ── Persist ALL messages to wa_messages for Chat view ──
+  await persistMessage(msg, accountId, workspaceId);
 
-  // Skip messages sent by us
+  // ── Filter out irrelevant messages for distribution engine ──
+
+  // Skip messages sent by us (after persisting so they appear in chat)
   if (msg.key.fromMe) return;
 
   // Skip status broadcasts
@@ -147,6 +208,9 @@ async function handleMessage(
 
   // ── DM handling — direct bot triggers ──
   if (remoteJid.endsWith('@s.whatsapp.net')) {
+    // Auto-reply greeting + lead notification (runs before bot trigger logic)
+    await handleDmLeadCapture(socket, msg, remoteJid, accountId, workspaceId);
+
     const senderPhone = remoteJid.replace('@s.whatsapp.net', '');
 
     // Find direct bot rules (source_group_id IS NULL) for this workspace
@@ -232,6 +296,87 @@ async function handleMessage(
         `messages=${enqueued} text="${(extracted.text ?? '').slice(0, 80)}"`
       );
     }
+  }
+}
+
+/**
+ * Auto-Reply + Lead Notification for private DMs.
+ *
+ * When a new message arrives from a contact we haven't recently replied to:
+ * 1. Sends an auto-reply greeting (if configured and not in cooldown)
+ * 2. Sends a lead notification WhatsApp message to the workspace owner's phone
+ */
+async function handleDmLeadCapture(
+  socket: WASocket,
+  msg: WAMessage,
+  remoteJid: string,
+  accountId: string,
+  workspaceId: string
+): Promise<void> {
+  try {
+    // Load auto-reply settings
+    const settings = await db('auto_reply_settings')
+      .where({ workspace_id: workspaceId })
+      .first();
+
+    if (!settings?.is_enabled) return;
+
+    const cooldownMinutes = settings.cooldown_minutes ?? 60;
+    const cutoff = new Date(Date.now() - cooldownMinutes * 60 * 1000);
+
+    // Cooldown: skip if we already replied to this number within the window
+    const recentOutbound = await db('wa_messages')
+      .where({ account_id: accountId, jid: remoteJid, is_from_me: true })
+      .where('ts', '>=', cutoff)
+      .first();
+
+    if (recentOutbound) {
+      logger.debug(`Auto-reply cooldown active for ${remoteJid} (replied within ${cooldownMinutes}m)`);
+      return;
+    }
+
+    const senderPhone = remoteJid.replace('@s.whatsapp.net', '');
+    const senderName: string = (msg as any).pushName || senderPhone;
+
+    // ── 1. Send auto-reply greeting ──
+    if (settings.greeting_text) {
+      await socket.sendMessage(remoteJid, { text: settings.greeting_text });
+      logger.info(`Auto-reply sent to ${remoteJid} (${senderName})`);
+    }
+
+    // ── 2. Send lead notification to workspace owner ──
+    if (settings.send_lead_notification) {
+      // Prefer settings override, fall back to workspace contact_phone
+      let notifPhone: string | null = settings.notification_phone ?? null;
+      if (!notifPhone) {
+        const workspace = await db('workspaces')
+          .where({ id: workspaceId })
+          .select('contact_phone')
+          .first();
+        notifPhone = workspace?.contact_phone ?? null;
+      }
+
+      if (notifPhone) {
+        const normalizedNotif = normalizePhone(notifPhone);
+        const ownerJid = `${normalizedNotif}@s.whatsapp.net`;
+
+        // Don't notify the owner if THEY are the sender
+        if (ownerJid === remoteJid) return;
+
+        const waLink = `https://wa.me/${senderPhone}`;
+        const notificationText =
+          `🎯 *ליד חדש הגיע!*\n\n` +
+          `📱 מספר: +${senderPhone}\n` +
+          `👤 שם: ${senderName}\n\n` +
+          `לפתיחת שיחה:\n${waLink}`;
+
+        await socket.sendMessage(ownerJid, { text: notificationText });
+        logger.info(`Lead notification sent to owner (${ownerJid}) for new contact ${remoteJid}`);
+      }
+    }
+  } catch (err) {
+    // Non-critical — never crash the listener
+    logger.error(`handleDmLeadCapture error for ${remoteJid}:`, err);
   }
 }
 

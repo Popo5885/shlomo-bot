@@ -19,8 +19,6 @@ import {
   Users,
   Radio,
   Bot,
-  Lock,
-  Unlock,
   Shield,
   Clock,
   Zap,
@@ -30,17 +28,19 @@ import {
   FileText,
   Image,
   BarChart3,
+  Pencil,
+  Ban,
+  CheckCircle2,
+  BellRing,
   ChevronDown,
   ChevronUp,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
 } from "@/components/ui/card";
 import { TiltCard } from "@/components/effects/tilt-card";
 import { MagneticButton } from "@/components/effects/magnetic-button";
@@ -54,14 +54,7 @@ import type { DistributionRule, Destination } from "@/types/api";
 type TriggerType = "listen" | "direct" | null;
 type DelayPreset = "fast" | "medium" | "slow" | "custom";
 type BotConflictMode = "run_both" | "run_distribution_only" | "run_bot_only";
-type SuffixOverride = "default" | "custom" | "none" | "telegram";
-
-interface SenderPermissions {
-  is_main_admin: boolean;
-  can_send_free: boolean;
-  can_delete_all: boolean;
-  auto_new_groups: boolean;
-}
+type SuffixOverride = "default" | "custom" | "none";
 
 interface PerGroupSuffix {
   destination_id: string;
@@ -70,83 +63,55 @@ interface PerGroupSuffix {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Constants
+   Wizard step definitions
    ═══════════════════════════════════════════════════════════ */
 
-const steps = [
-  { num: 1, emoji: "\uD83C\uDFAF", label: "קבוצות יעד" },
-  { num: 2, emoji: "\u26A1", label: "טריגר" },
-  { num: 3, emoji: "\uD83D\uDC65", label: "מורשים" },
-  { num: 4, emoji: "\u2699\uFE0F", label: "הגדרות" },
+const STEPS = [
+  { num: 1, emoji: "🎯", label: "מקור ויעד" },
+  { num: 2, emoji: "✍️", label: "חתימות" },
+  { num: 3, emoji: "🤖", label: "התנגשות בוטים" },
+  { num: 4, emoji: "✅", label: "אישורים ושמירה" },
 ];
 
-const slideVariants = {
-  enter: (direction: number) => ({
-    x: direction > 0 ? -80 : 80,
-    opacity: 0,
-    scale: 0.97,
-  }),
+const slide = {
+  enter: (d: number) => ({ x: d > 0 ? -80 : 80, opacity: 0, scale: 0.97 }),
   center: { x: 0, opacity: 1, scale: 1 },
-  exit: (direction: number) => ({
-    x: direction > 0 ? 80 : -80,
-    opacity: 0,
-    scale: 0.97,
-  }),
+  exit: (d: number) => ({ x: d > 0 ? 80 : -80, opacity: 0, scale: 0.97 }),
 };
 
 const destTypeLabel: Record<string, string> = {
-  WA_GROUP: "\u05E7\u05D1\u05D5\u05E6\u05EA WA",
-  WA_CHANNEL: "\u05E2\u05E8\u05D5\u05E5 WA",
-  TG_GROUP: "\u05E7\u05D1\u05D5\u05E6\u05EA TG",
-  TG_CHANNEL: "\u05E2\u05E8\u05D5\u05E5 TG",
-  TG_SUPERGROUP: "\u05E2\u05E8\u05D5\u05E5 TG",
+  WA_GROUP: "קבוצת WA",
+  WA_CHANNEL: "ערוץ WA",
+  TG_GROUP: "קבוצת TG",
+  TG_CHANNEL: "ערוץ TG",
+  TG_SUPERGROUP: "ערוץ TG",
 };
 
-function isWhatsApp(platform: string) {
-  return platform === "WHATSAPP_WEB" || platform === "WHATSAPP_BUSINESS_API";
-}
+/* ═══════════════════════════════════════════════════════════
+   Glass helpers
+   ═══════════════════════════════════════════════════════════ */
 
-function isTelegram(platform: string) {
-  return platform === "TELEGRAM_BOT" || platform === "TELEGRAM_USERBOT";
-}
+const glass = "bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl";
+const glassInner = "bg-white/[0.03] backdrop-blur-md border border-white/[0.06] rounded-xl";
 
+function isWhatsApp(p: string) {
+  return p === "WHATSAPP_WEB" || p === "WHATSAPP_BUSINESS_API";
+}
 function getDestIcon(dest: Destination) {
   if (isWhatsApp(dest.platform)) {
-    if (dest.destination_type === "WA_CHANNEL")
-      return <Globe className="h-4 w-4 shrink-0 text-blue-400" />;
-    return <MessageSquare className="h-4 w-4 shrink-0 text-emerald-400" />;
+    return dest.destination_type === "WA_CHANNEL"
+      ? <Globe className="h-4 w-4 shrink-0 text-blue-400" />
+      : <MessageSquare className="h-4 w-4 shrink-0 text-emerald-400" />;
   }
   return <Send className="h-4 w-4 shrink-0 text-blue-400" />;
 }
-
 function getDestColor(dest: Destination) {
-  if (isWhatsApp(dest.platform)) {
-    if (dest.destination_type === "WA_CHANNEL") return "blue";
-    return "emerald";
-  }
+  if (isWhatsApp(dest.platform)) return dest.destination_type === "WA_CHANNEL" ? "blue" : "emerald";
   return "blue";
 }
 
-/* ═══════════════════════════════════════════════════════════
-   Glassmorphism helper classes
-   ═══════════════════════════════════════════════════════════ */
-
-const glass =
-  "bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl";
-const glassInner =
-  "bg-white/[0.03] backdrop-blur-md border border-white/[0.06] rounded-xl";
-
-/* ═══════════════════════════════════════════════════════════
-   Sub-components
-   ═══════════════════════════════════════════════════════════ */
-
-function Toggle({
-  value,
-  onChange,
-}: {
-  value: boolean;
-  onChange: (v: boolean) => void;
-}) {
+/* ── Toggle ── */
+function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
       type="button"
@@ -157,227 +122,168 @@ function Toggle({
           : "bg-white/10"
       }`}
     >
-      <span
-        className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-md transition-transform duration-300 ${
-          value ? "translate-x-0.5" : "translate-x-[1.35rem]"
-        }`}
-      />
+      <span className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-md transition-transform duration-300 ${value ? "translate-x-0.5" : "translate-x-[1.35rem]"}`} />
     </button>
   );
 }
 
-function GlassSection({
-  children,
-  className = "",
+/* ── ToggleRow ── */
+function ToggleRow({
+  icon: Icon,
+  label,
+  desc,
+  value,
+  onChange,
+  iconColor = "text-violet-400",
 }: {
-  children: React.ReactNode;
-  className?: string;
+  icon: React.ElementType;
+  label: string;
+  desc: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+  iconColor?: string;
 }) {
-  return <div className={`${glass} p-6 ${className}`}>{children}</div>;
+  return (
+    <div className={`${glassInner} p-4 flex items-center justify-between gap-4`}>
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/5">
+          <Icon className={`h-4 w-4 ${iconColor}`} />
+        </div>
+        <div>
+          <p className="text-sm font-medium text-white">{label}</p>
+          <p className="text-xs text-white/40 mt-0.5">{desc}</p>
+        </div>
+      </div>
+      <Toggle value={value} onChange={onChange} />
+    </div>
+  );
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Main Page Component
+   Main Page
    ═══════════════════════════════════════════════════════════ */
 
 export default function NewRulePage() {
   const router = useRouter();
-  const [currentStep, setCurrentStep] = useState(1);
-  const [direction, setDirection] = useState(0);
+  const [step, setStep] = useState(1);
+  const [dir, setDir] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Available destinations
+  /* ── Data ── */
   const [destinations, setDestinations] = useState<Destination[]>([]);
   const [loadingDests, setLoadingDests] = useState(true);
 
-  // Step 1: Target Groups
+  /* ── Step 1: Source + Destinations ── */
+  const [triggerType, setTriggerType] = useState<TriggerType>(null);
+  const [sourceGroupId, setSourceGroupId] = useState("");
   const [destinationIds, setDestinationIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Step 2: Trigger
-  const [triggerType, setTriggerType] = useState<TriggerType>(null);
-  const [sourceGroupId, setSourceGroupId] = useState("");
-
-  // Step 3: Authorized Senders
-  const [allowAll, setAllowAll] = useState(false);
-  const [phones, setPhones] = useState<string[]>([]);
-  const [newPhone, setNewPhone] = useState("");
-  const [permissions, setPermissions] = useState<SenderPermissions>({
-    is_main_admin: false,
-    can_send_free: false,
-    can_delete_all: false,
-    auto_new_groups: false,
-  });
-
-  // Step 4: Settings
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [delayPreset, setDelayPreset] = useState<DelayPreset>("medium");
-  const [delayMin, setDelayMin] = useState(5);
-  const [delayMax, setDelayMax] = useState(15);
-  const [requiresApproval, setRequiresApproval] = useState(false);
-  const [forwardMedia, setForwardMedia] = useState(true);
-  const [forwardFiles, setForwardFiles] = useState(true);
-  const [forwardPolls, setForwardPolls] = useState(true);
-  const [stripSenderInfo, setStripSenderInfo] = useState(true);
-  const [hashStripEnabled, setHashStripEnabled] = useState(false);
-
-  // Suffix Engine
+  /* ── Step 2: Suffixes ── */
   const [defaultSuffixEnabled, setDefaultSuffixEnabled] = useState(false);
   const [defaultSuffix, setDefaultSuffix] = useState("");
   const [topBannerEnabled, setTopBannerEnabled] = useState(false);
   const [topBanner, setTopBanner] = useState("");
   const [telegramSuffixEnabled, setTelegramSuffixEnabled] = useState(false);
   const [telegramSuffix, setTelegramSuffix] = useState("");
-  const [perGroupSuffixOpen, setPerGroupSuffixOpen] = useState(false);
-  const [perGroupSuffixes, setPerGroupSuffixes] = useState<PerGroupSuffix[]>(
-    []
-  );
+  const [hashStripEnabled, setHashStripEnabled] = useState(false);
+  const [perGroupOpen, setPerGroupOpen] = useState(false);
+  const [perGroupSuffixes, setPerGroupSuffixes] = useState<PerGroupSuffix[]>([]);
 
-  // Bot Conflict
-  const [botConflictMode, setBotConflictMode] =
-    useState<BotConflictMode>("run_both");
+  /* ── Step 3: Bot Collisions ── */
+  const [botConflictMode, setBotConflictMode] = useState<BotConflictMode>("run_both");
 
-  /* ─── Data Loading ─── */
+  /* ── Step 4: Approvals + Settings ── */
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [requiresApproval, setRequiresApproval] = useState(false);
+  const [delayPreset, setDelayPreset] = useState<DelayPreset>("medium");
+  const [delayMin, setDelayMin] = useState(5);
+  const [delayMax, setDelayMax] = useState(15);
+  const [forwardMedia, setForwardMedia] = useState(true);
+  const [forwardFiles, setForwardFiles] = useState(true);
+  const [forwardPolls, setForwardPolls] = useState(true);
+  const [stripSenderInfo, setStripSenderInfo] = useState(true);
+  const [allowAll, setAllowAll] = useState(false);
+  const [phones, setPhones] = useState<string[]>([]);
+  const [newPhone, setNewPhone] = useState("");
+  const [sendersOpen, setSendersOpen] = useState(false);
 
+  /* ── Load destinations ── */
   useEffect(() => {
-    api
-      .get<Destination[]>("/api/client/destinations")
+    api.get<Destination[]>("/api/client/destinations")
       .then(setDestinations)
       .catch(() => {})
       .finally(() => setLoadingDests(false));
   }, []);
 
-  // Initialize per-group suffixes when destinations change
+  /* ── Sync per-group suffixes when destinations change ── */
   useEffect(() => {
     if (destinationIds.length > 0) {
-      setPerGroupSuffixes((prev) => {
-        const existing = new Map(prev.map((p) => [p.destination_id, p]));
-        return destinationIds.map(
-          (id) =>
-            existing.get(id) || {
-              destination_id: id,
-              mode: "default" as SuffixOverride,
-              custom_text: "",
-            }
+      setPerGroupSuffixes(prev => {
+        const map = new Map(prev.map(p => [p.destination_id, p]));
+        return destinationIds.map(id =>
+          map.get(id) ?? { destination_id: id, mode: "default" as SuffixOverride, custom_text: "" }
         );
       });
     }
   }, [destinationIds]);
 
-  /* ─── Derived ─── */
+  /* ── Delay presets ── */
+  useEffect(() => {
+    if (delayPreset === "fast") { setDelayMin(1); setDelayMax(3); }
+    else if (delayPreset === "medium") { setDelayMin(5); setDelayMax(15); }
+    else if (delayPreset === "slow") { setDelayMin(15); setDelayMax(45); }
+  }, [delayPreset]);
 
-  const filteredDestinations = useMemo(() => {
+  /* ── Derived ── */
+  const filtered = useMemo(() => {
     if (!searchQuery.trim()) return destinations;
     const q = searchQuery.toLowerCase();
-    return destinations.filter(
-      (d) =>
-        (d.display_name || "").toLowerCase().includes(q) ||
-        d.platform_dest_id.toLowerCase().includes(q) ||
-        (destTypeLabel[d.destination_type] || "").includes(q)
+    return destinations.filter(d =>
+      (d.display_name || "").toLowerCase().includes(q) ||
+      d.platform_dest_id.toLowerCase().includes(q)
     );
   }, [destinations, searchQuery]);
 
-  const sourceGroups = useMemo(
-    () =>
-      destinations.filter(
-        (d) =>
-          d.destination_type === "WA_GROUP" ||
-          d.destination_type === "TG_GROUP" ||
-          d.destination_type === "TG_SUPERGROUP" ||
-          d.destination_type === "TG_CHANNEL"
-      ),
-    [destinations]
-  );
+  const sourceGroups = useMemo(() =>
+    destinations.filter(d => ["WA_GROUP", "TG_GROUP", "TG_SUPERGROUP", "TG_CHANNEL"].includes(d.destination_type)),
+  [destinations]);
 
-  const allSelected =
-    filteredDestinations.length > 0 &&
-    filteredDestinations.every((d) => destinationIds.includes(d.id));
+  const allSelected = filtered.length > 0 && filtered.every(d => destinationIds.includes(d.id));
 
-  /* ─── Navigation ─── */
+  /* ── Navigation ── */
+  const goTo = (next: number) => { setDir(next > step ? 1 : -1); setStep(next); };
 
-  const goToStep = (step: number) => {
-    setDirection(step > currentStep ? 1 : -1);
-    setCurrentStep(step);
+  /* ── Validation ── */
+  const canStep1 = destinationIds.length > 0 && triggerType !== null && (triggerType === "direct" || sourceGroupId.trim() !== "");
+  const canStep4 = name.trim().length > 0;
+
+  /* ── Helpers ── */
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      const ids = new Set(filtered.map(d => d.id));
+      setDestinationIds(destinationIds.filter(id => !ids.has(id)));
+    } else {
+      setDestinationIds(Array.from(new Set([...destinationIds, ...filtered.map(d => d.id)])));
+    }
   };
-
-  /* ─── Validation ─── */
-
-  const canProceedStep1 = destinationIds.length > 0;
-  const canProceedStep2 =
-    triggerType !== null &&
-    (triggerType === "direct" || sourceGroupId.trim() !== "");
-  const canProceedStep3 = allowAll || phones.length > 0;
-
-  /* ─── Phone management ─── */
 
   const addPhone = () => {
     const p = newPhone.trim();
-    if (!p || phones.includes(p)) return;
-    setPhones([...phones, p]);
-    setNewPhone("");
+    if (p && !phones.includes(p)) { setPhones([...phones, p]); setNewPhone(""); }
   };
 
-  const removePhone = (idx: number) => {
-    setPhones(phones.filter((_, i) => i !== idx));
-  };
-
-  /* ─── Delay presets ─── */
-
-  useEffect(() => {
-    if (delayPreset === "fast") {
-      setDelayMin(1);
-      setDelayMax(3);
-    } else if (delayPreset === "medium") {
-      setDelayMin(5);
-      setDelayMax(15);
-    } else if (delayPreset === "slow") {
-      setDelayMin(15);
-      setDelayMax(45);
-    }
-  }, [delayPreset]);
-
-  /* ─── Select all toggle ─── */
-
-  const toggleSelectAll = () => {
-    if (allSelected) {
-      const filteredIds = new Set(filteredDestinations.map((d) => d.id));
-      setDestinationIds(destinationIds.filter((id) => !filteredIds.has(id)));
-    } else {
-      const newIds = new Set([
-        ...destinationIds,
-        ...filteredDestinations.map((d) => d.id),
-      ]);
-      setDestinationIds(Array.from(newIds));
-    }
-  };
-
-  /* ─── Per-group suffix update ─── */
-
-  const updatePerGroupSuffix = (
-    destId: string,
-    field: "mode" | "custom_text",
-    value: string
-  ) => {
-    setPerGroupSuffixes((prev) =>
-      prev.map((p) =>
-        p.destination_id === destId ? { ...p, [field]: value } : p
-      )
-    );
-  };
-
-  /* ─── Submit ─── */
-
+  /* ── Submit ── */
   const handleSubmit = async () => {
+    if (!name.trim()) return;
     setError(null);
     setLoading(true);
-
     try {
       const body: Record<string, unknown> = {
-        name,
-        source_group_id:
-          triggerType === "listen" ? sourceGroupId.trim() : "direct_bot",
+        name: name.trim(),
+        source_group_id: triggerType === "listen" ? sourceGroupId.trim() : "direct_bot",
         delay_mode: "random",
         delay_preset: delayPreset,
         delay_min_seconds: delayMin,
@@ -391,36 +297,21 @@ export default function NewRulePage() {
         append_suffix_enabled: defaultSuffixEnabled,
         destination_ids: destinationIds,
         bot_conflict_mode: botConflictMode,
-        authorized_senders_mode: allowAll ? "all" : "whitelist",
+        authorized_senders_mode: allowAll ? "all" : (phones.length > 0 ? "whitelist" : "all"),
       };
-
       if (description) body.description = description;
-      if (defaultSuffixEnabled && defaultSuffix)
-        body.append_suffix = defaultSuffix;
+      if (defaultSuffixEnabled && defaultSuffix) body.append_suffix = defaultSuffix;
       if (topBannerEnabled && topBanner) body.top_banner = topBanner;
-      if (telegramSuffixEnabled && telegramSuffix)
-        body.telegram_suffix = telegramSuffix;
+      if (telegramSuffixEnabled && telegramSuffix) body.telegram_suffix = telegramSuffix;
+      if (!allowAll && phones.length > 0) body.authorized_senders = phones;
+      const overrides = perGroupSuffixes.filter(p => p.mode !== "default");
+      if (overrides.length > 0) body.per_group_suffix_overrides = overrides;
 
-      if (!allowAll && phones.length > 0) {
-        body.authorized_senders = phones;
-        body.sender_permissions = permissions;
-      }
-
-      const groupOverrides = perGroupSuffixes.filter(
-        (p) => p.mode !== "default"
-      );
-      if (groupOverrides.length > 0) {
-        body.per_group_suffix_overrides = groupOverrides;
-      }
-
-      const rule = await api.post<DistributionRule>(
-        "/api/client/rules",
-        body
-      );
+      const rule = await api.post<DistributionRule>("/api/client/rules", body);
       router.push(`/dashboard/rules/${rule.id}`);
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
-      else setError("\u05E9\u05D2\u05D9\u05D0\u05D4 \u05DC\u05D0 \u05E6\u05E4\u05D5\u05D9\u05D4");
+      else setError("שגיאה לא צפויה");
     } finally {
       setLoading(false);
     }
@@ -432,7 +323,8 @@ export default function NewRulePage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 pb-12" dir="rtl">
-      {/* ─── Header ─── */}
+
+      {/* Header */}
       <div className="flex items-center gap-4">
         <Link href="/dashboard/rules">
           <Button variant="ghost" size="icon" className="text-white/60 hover:text-white hover:bg-white/10">
@@ -441,101 +333,184 @@ export default function NewRulePage() {
         </Link>
         <div>
           <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-l from-violet-400 to-blue-400 bg-clip-text text-transparent">
-            הפצה חדשה
+            אוטומציה חדשה
           </h1>
-          <p className="text-sm text-white/40">הגדר כלל הפצה אוטומטי חדש</p>
+          <p className="text-sm text-white/40">הגדר כלל הפצה אוטומטי ב-4 שלבים פשוטים</p>
         </div>
       </div>
 
-      {/* ─── Error ─── */}
+      {/* Error */}
       {error && (
         <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
+          initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
           className={`${glass} border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300`}
         >
           {error}
         </motion.div>
       )}
 
-      {/* ─── Step Indicator ─── */}
-      <div className="flex items-center justify-center gap-2 flex-wrap">
-        {steps.map((step, idx) => (
-          <div key={step.num} className="flex items-center gap-2">
+      {/* Step indicator */}
+      <div className="flex items-center justify-center gap-1 flex-wrap">
+        {STEPS.map((s, idx) => (
+          <div key={s.num} className="flex items-center gap-1">
             <button
-              onClick={() => {
-                if (step.num < currentStep) goToStep(step.num);
-              }}
-              className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-300 ${
-                currentStep === step.num
+              type="button"
+              onClick={() => { if (s.num < step) goTo(s.num); }}
+              className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all duration-300 ${
+                step === s.num
                   ? "bg-gradient-to-r from-violet-500/20 to-blue-500/20 border border-violet-500/30 text-white shadow-lg shadow-violet-500/10"
-                  : currentStep > step.num
-                    ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
-                    : "bg-white/5 border border-white/10 text-white/40"
+                  : step > s.num
+                    ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 cursor-pointer hover:bg-emerald-500/15"
+                    : "bg-white/5 border border-white/10 text-white/30 cursor-default"
               }`}
             >
-              {currentStep > step.num ? (
-                <Check className="h-4 w-4 text-emerald-400" />
-              ) : (
-                <span>{step.emoji}</span>
-              )}
-              {step.label}
+              {step > s.num
+                ? <Check className="h-3.5 w-3.5 text-emerald-400" />
+                : <span className="text-base leading-none">{s.emoji}</span>
+              }
+              <span className="hidden sm:inline">{s.label}</span>
+              <span className="sm:hidden font-bold">{s.num}</span>
             </button>
-            {idx < steps.length - 1 && (
-              <ChevronLeft className="h-4 w-4 text-white/20" />
-            )}
+            {idx < STEPS.length - 1 && <ChevronLeft className="h-3.5 w-3.5 text-white/15" />}
           </div>
         ))}
       </div>
 
-      {/* ─── Animated Step Content ─── */}
-      <AnimatePresence mode="wait" custom={direction}>
-        {/* ════════════════════════════════════════════════════
-           STEP 1: Target Groups
-           ════════════════════════════════════════════════════ */}
-        {currentStep === 1 && (
-          <motion.div
-            key="step1"
-            custom={direction}
-            variants={slideVariants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{ duration: 0.35, ease: "easeInOut" }}
-            className="space-y-6"
-          >
-            <GlassSection>
-              <div className="space-y-1.5 mb-6">
+      {/* Animated step content */}
+      <AnimatePresence mode="wait" custom={dir}>
+
+        {/* ══════════════════════════════════════════════════════
+            STEP 1 — מקור ויעד
+            ══════════════════════════════════════════════════════ */}
+        {step === 1 && (
+          <motion.div key="s1" custom={dir} variants={slide} initial="enter" animate="center" exit="exit"
+            transition={{ duration: 0.3, ease: "easeInOut" }} className="space-y-4">
+
+            {/* 1a: Trigger type */}
+            <div className={`${glass} p-6 space-y-4`}>
+              <div>
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <span className="text-xl">{"\uD83C\uDFAF"}</span>
-                  בחירת קבוצות יעד
+                  <span className="text-xl">📡</span> מקור הטריגר
                 </h2>
-                <p className="text-sm text-white/40">
-                  סמנו את הקבוצות שיקבלו את ההודעות המופצות
-                </p>
+                <p className="text-sm text-white/40 mt-1">מאיפה תגיע ההודעה שתופץ?</p>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <TiltCard className="rounded-2xl" maxTilt={5}>
+                  <motion.button
+                    type="button" whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                    onClick={() => setTriggerType("listen")}
+                    className={`flex w-full flex-col items-center gap-3 rounded-2xl border-2 p-5 text-center transition-all duration-300 ${
+                      triggerType === "listen"
+                        ? "border-violet-500/60 bg-violet-500/10 shadow-lg shadow-violet-500/10"
+                        : "border-white/10 hover:border-violet-500/30 hover:bg-violet-500/5"
+                    }`}
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500/20 to-blue-500/20">
+                      <Radio className="h-6 w-6 text-violet-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-white">📡 האזנה לקבוצת מקור</p>
+                      <p className="mt-1 text-xs text-white/40">העתק הודעות מקבוצה ספציפית</p>
+                    </div>
+                    {triggerType === "listen" && (
+                      <div className="flex h-5 w-5 items-center justify-center rounded-full bg-violet-500">
+                        <Check className="h-3 w-3 text-white" />
+                      </div>
+                    )}
+                  </motion.button>
+                </TiltCard>
+
+                <TiltCard className="rounded-2xl" maxTilt={5}>
+                  <motion.button
+                    type="button" whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                    onClick={() => { setTriggerType("direct"); setSourceGroupId("direct_bot"); }}
+                    className={`flex w-full flex-col items-center gap-3 rounded-2xl border-2 p-5 text-center transition-all duration-300 ${
+                      triggerType === "direct"
+                        ? "border-blue-500/60 bg-blue-500/10 shadow-lg shadow-blue-500/10"
+                        : "border-white/10 hover:border-blue-500/30 hover:bg-blue-500/5"
+                    }`}
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500/20 to-cyan-500/20">
+                      <Bot className="h-6 w-6 text-blue-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-white">🤖 הודעה ישירה לבוט</p>
+                      <p className="mt-1 text-xs text-white/40">שלח הודעה פרטית לבוט להפצה</p>
+                    </div>
+                    {triggerType === "direct" && (
+                      <div className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-500">
+                        <Check className="h-3 w-3 text-white" />
+                      </div>
+                    )}
+                  </motion.button>
+                </TiltCard>
+              </div>
+
+              {/* Source group select */}
+              <AnimatePresence>
+                {triggerType === "listen" && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }} className="overflow-hidden"
+                  >
+                    <div className={`mt-1 space-y-2 ${glassInner} p-4`}>
+                      <label className="text-sm font-medium text-white/70">בחר קבוצת מקור</label>
+                      {sourceGroups.length > 0 ? (
+                        <select
+                          value={sourceGroupId}
+                          onChange={e => setSourceGroupId(e.target.value)}
+                          className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 [&>option]:bg-slate-900 [&>option]:text-white"
+                        >
+                          <option value="">-- בחר קבוצה --</option>
+                          {sourceGroups.map(g => (
+                            <option key={g.id} value={g.id}>
+                              {g.display_name || g.platform_dest_id} ({destTypeLabel[g.destination_type] || g.destination_type})
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <Input
+                          value={sourceGroupId}
+                          onChange={e => setSourceGroupId(e.target.value)}
+                          placeholder="הזן מזהה קבוצת מקור"
+                          className="bg-white/5 border-white/10 text-white placeholder:text-white/30 font-mono text-sm"
+                        />
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            {/* 1b: Destination groups */}
+            <div className={`${glass} p-6 space-y-4`}>
+              <div>
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <span className="text-xl">🎯</span> קבוצות יעד
+                </h2>
+                <p className="text-sm text-white/40 mt-1">לאן יופצו ההודעות?</p>
               </div>
 
               {loadingDests ? (
-                <div className="flex justify-center py-12">
+                <div className="flex justify-center py-10">
                   <Loader2 className="h-6 w-6 animate-spin text-violet-400" />
                 </div>
               ) : destinations.length > 0 ? (
-                <div className="space-y-4">
-                  {/* Search + Select All */}
-                  <div className="flex items-center gap-3">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
                     <div className="relative flex-1">
                       <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/30" />
                       <Input
                         value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onChange={e => setSearchQuery(e.target.value)}
                         placeholder="חיפוש קבוצה..."
                         className="pr-9 bg-white/5 border-white/10 text-white placeholder:text-white/30"
                       />
                     </div>
                     <button
-                      type="button"
-                      onClick={toggleSelectAll}
-                      className={`shrink-0 rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 ${
+                      type="button" onClick={toggleSelectAll}
+                      className={`shrink-0 rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
                         allSelected
                           ? "bg-violet-500/20 border border-violet-500/30 text-violet-300"
                           : "bg-white/5 border border-white/10 text-white/60 hover:bg-white/10"
@@ -545,16 +520,15 @@ export default function NewRulePage() {
                     </button>
                   </div>
 
-                  {/* List */}
-                  <div className="max-h-[22rem] space-y-1.5 overflow-y-auto rounded-xl border border-white/[0.06] bg-white/[0.02] p-2 scrollbar-thin scrollbar-thumb-white/10">
-                    {filteredDestinations.map((dest) => {
-                      const selected = destinationIds.includes(dest.id);
+                  <div className="max-h-64 space-y-1.5 overflow-y-auto rounded-xl border border-white/[0.06] bg-white/[0.02] p-2">
+                    {filtered.map(dest => {
+                      const sel = destinationIds.includes(dest.id);
                       const color = getDestColor(dest);
                       return (
                         <label
                           key={dest.id}
                           className={`flex cursor-pointer items-center gap-3 rounded-xl p-3 transition-all duration-200 ${
-                            selected
+                            sel
                               ? color === "emerald"
                                 ? "bg-emerald-500/10 border border-emerald-500/20"
                                 : "bg-blue-500/10 border border-blue-500/20"
@@ -562,83 +536,59 @@ export default function NewRulePage() {
                           }`}
                         >
                           <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setDestinationIds([...destinationIds, dest.id]);
-                              } else {
-                                setDestinationIds(
-                                  destinationIds.filter((id) => id !== dest.id)
-                                );
-                              }
+                            type="checkbox" checked={sel}
+                            onChange={e => {
+                              if (e.target.checked) setDestinationIds([...destinationIds, dest.id]);
+                              else setDestinationIds(destinationIds.filter(id => id !== dest.id));
                             }}
                             className="h-4 w-4 rounded border-white/20 bg-white/5 text-violet-500 focus:ring-violet-500/40"
                           />
                           {getDestIcon(dest)}
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-medium text-white truncate">
-                                {dest.display_name || dest.platform_dest_id}
-                              </p>
-                              <span
-                                className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                  color === "emerald"
-                                    ? "bg-emerald-500/15 text-emerald-300"
-                                    : "bg-blue-500/15 text-blue-300"
-                                }`}
-                              >
-                                {destTypeLabel[dest.destination_type] ||
-                                  dest.destination_type}
-                              </span>
-                            </div>
+                            <p className="text-sm font-medium text-white truncate">
+                              {dest.display_name || dest.platform_dest_id}
+                            </p>
                             {dest.participant_count != null && (
-                              <p className="text-xs text-white/30">
-                                {dest.participant_count} משתתפים
-                              </p>
+                              <p className="text-xs text-white/30">{dest.participant_count} משתתפים</p>
                             )}
                           </div>
+                          <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            color === "emerald" ? "bg-emerald-500/15 text-emerald-300" : "bg-blue-500/15 text-blue-300"
+                          }`}>
+                            {destTypeLabel[dest.destination_type] || dest.destination_type}
+                          </span>
                         </label>
                       );
                     })}
-
-                    {filteredDestinations.length === 0 && (
-                      <p className="py-6 text-center text-sm text-white/30">
-                        לא נמצאו תוצאות
-                      </p>
+                    {filtered.length === 0 && (
+                      <p className="py-6 text-center text-sm text-white/30">לא נמצאו תוצאות</p>
                     )}
                   </div>
+
+                  {destinationIds.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <div className="h-2 w-2 rounded-full bg-violet-400 animate-pulse" />
+                      <p className="text-sm font-medium text-violet-300">נבחרו {destinationIds.length} קבוצות</p>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className={`${glassInner} p-8 text-center`}>
                   <Users className="mx-auto h-8 w-8 mb-3 text-white/20" />
                   <p className="text-sm text-white/50">אין קבוצות זמינות עדיין</p>
-                  <p className="text-xs text-white/30 mt-1">
-                    חברו את WhatsApp / Telegram כדי לסנכרן קבוצות
-                  </p>
+                  <p className="text-xs text-white/30 mt-1">חברו WhatsApp / Telegram כדי לסנכרן קבוצות</p>
                 </div>
               )}
-
-              {/* Counter */}
-              {destinationIds.length > 0 && (
-                <div className="mt-4 flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full bg-violet-400 animate-pulse" />
-                  <p className="text-sm font-medium text-violet-300">
-                    נבחרו {destinationIds.length} קבוצות
-                  </p>
-                </div>
-              )}
-            </GlassSection>
+            </div>
 
             {/* Nav */}
             <div className="flex justify-start">
               <MagneticButton>
                 <Button
-                  onClick={() => goToStep(2)}
-                  disabled={!canProceedStep1}
+                  onClick={() => goTo(2)} disabled={!canStep1}
                   className="bg-gradient-to-r from-violet-600 to-blue-600 shadow-lg shadow-violet-500/25 border-0 text-white"
                 >
-                  הבא
+                  הבא — חתימות
                   <ChevronLeft className="h-4 w-4 mr-1" />
                 </Button>
               </MagneticButton>
@@ -646,872 +596,517 @@ export default function NewRulePage() {
           </motion.div>
         )}
 
-        {/* ════════════════════════════════════════════════════
-           STEP 2: Trigger Source
-           ════════════════════════════════════════════════════ */}
-        {currentStep === 2 && (
-          <motion.div
-            key="step2"
-            custom={direction}
-            variants={slideVariants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{ duration: 0.35, ease: "easeInOut" }}
-            className="space-y-6"
-          >
-            <GlassSection>
-              <div className="space-y-1.5 mb-6">
+        {/* ══════════════════════════════════════════════════════
+            STEP 2 — חתימות
+            ══════════════════════════════════════════════════════ */}
+        {step === 2 && (
+          <motion.div key="s2" custom={dir} variants={slide} initial="enter" animate="center" exit="exit"
+            transition={{ duration: 0.3, ease: "easeInOut" }} className="space-y-4">
+
+            <div className={`${glass} p-6 space-y-5`}>
+              <div>
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <span className="text-xl">{"\u26A1"}</span>
-                  מקור טריגר
+                  <span className="text-xl">✍️</span> חתימות אוטומטיות
                 </h2>
-                <p className="text-sm text-white/40">
-                  מאיפה נשאב את ההודעות להפצה?
-                </p>
+                <p className="text-sm text-white/40 mt-1">טקסט שיצורף אוטומטית לכל הודעה מופצת</p>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <TiltCard className="rounded-2xl" maxTilt={5}>
-                  <motion.button
-                    type="button"
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => setTriggerType("listen")}
-                    className={`group flex w-full flex-col items-center gap-4 rounded-2xl border-2 p-6 text-center transition-all duration-300 ${
-                      triggerType === "listen"
-                        ? "border-violet-500/60 bg-violet-500/10 shadow-lg shadow-violet-500/10"
-                        : "border-white/10 hover:border-violet-500/30 hover:bg-violet-500/5"
-                    }`}
-                  >
-                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500/20 to-blue-500/20">
-                      <Radio className="h-7 w-7 text-violet-400" />
-                    </div>
-                    <div>
-                      <p className="text-base font-semibold text-white">
-                        {"\uD83D\uDCE1"} האזנה לקבוצת מקור
-                      </p>
-                      <p className="mt-1.5 text-sm text-white/40">
-                        המערכת תעתיק הודעות מקבוצה ספציפית ותפיץ אותן הלאה
-                      </p>
-                    </div>
-                  </motion.button>
-                </TiltCard>
-
-                <TiltCard className="rounded-2xl" maxTilt={5}>
-                  <motion.button
-                    type="button"
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => {
-                      setTriggerType("direct");
-                      setSourceGroupId("direct_bot");
-                    }}
-                    className={`group flex w-full flex-col items-center gap-4 rounded-2xl border-2 p-6 text-center transition-all duration-300 ${
-                      triggerType === "direct"
-                        ? "border-blue-500/60 bg-blue-500/10 shadow-lg shadow-blue-500/10"
-                        : "border-white/10 hover:border-blue-500/30 hover:bg-blue-500/5"
-                    }`}
-                  >
-                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500/20 to-cyan-500/20">
-                      <Bot className="h-7 w-7 text-blue-400" />
-                    </div>
-                    <div>
-                      <p className="text-base font-semibold text-white">
-                        {"\uD83E\uDD16"} הודעה ישירה לבוט
-                      </p>
-                      <p className="mt-1.5 text-sm text-white/40">
-                        שליחת הודעה פרטית למספר של הבוט תשגר אותה לכל הקבוצות
-                      </p>
-                    </div>
-                  </motion.button>
-                </TiltCard>
-              </div>
-
-              {/* Source group dropdown */}
+              {/* Default suffix */}
+              <ToggleRow
+                icon={Pencil} label="חתימה ברירת מחדל"
+                desc="טקסט שיצורף בסוף כל הודעה"
+                value={defaultSuffixEnabled} onChange={setDefaultSuffixEnabled}
+              />
               <AnimatePresence>
-                {triggerType === "listen" && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="overflow-hidden"
-                  >
-                    <div className={`mt-4 space-y-2 ${glassInner} p-4`}>
-                      <label className="text-sm font-medium text-white/70">
-                        בחר קבוצת מקור
-                      </label>
-                      {sourceGroups.length > 0 ? (
-                        <select
-                          value={sourceGroupId}
-                          onChange={(e) => setSourceGroupId(e.target.value)}
-                          className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 [&>option]:bg-slate-900 [&>option]:text-white"
-                        >
-                          <option value="">-- בחר קבוצה --</option>
-                          {sourceGroups.map((g) => (
-                            <option key={g.id} value={g.id}>
-                              {g.display_name || g.platform_dest_id}{" "}
-                              ({destTypeLabel[g.destination_type] || g.destination_type})
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <Input
-                          value={sourceGroupId}
-                          onChange={(e) => setSourceGroupId(e.target.value)}
-                          placeholder="הזן מזהה קבוצת מקור"
-                          className="bg-white/5 border-white/10 text-white placeholder:text-white/30 font-mono text-sm"
-                        />
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </GlassSection>
-
-            {/* Nav */}
-            <div className="flex justify-between">
-              <MagneticButton>
-                <Button
-                  onClick={() => goToStep(3)}
-                  disabled={!canProceedStep2}
-                  className="bg-gradient-to-r from-violet-600 to-blue-600 shadow-lg shadow-violet-500/25 border-0 text-white"
-                >
-                  הבא
-                  <ChevronLeft className="h-4 w-4 mr-1" />
-                </Button>
-              </MagneticButton>
-              <Button
-                variant="ghost"
-                onClick={() => goToStep(1)}
-                className="text-white/50 hover:text-white hover:bg-white/5"
-              >
-                <ChevronRight className="h-4 w-4 ml-1" />
-                הקודם
-              </Button>
-            </div>
-          </motion.div>
-        )}
-
-        {/* ════════════════════════════════════════════════════
-           STEP 3: Authorized Senders
-           ════════════════════════════════════════════════════ */}
-        {currentStep === 3 && (
-          <motion.div
-            key="step3"
-            custom={direction}
-            variants={slideVariants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{ duration: 0.35, ease: "easeInOut" }}
-            className="space-y-6"
-          >
-            <GlassSection>
-              <div className="space-y-1.5 mb-6">
-                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <span className="text-xl">{"\uD83D\uDC65"}</span>
-                  הגדרת מורשי שליחה
-                </h2>
-                <p className="text-sm text-white/40">
-                  רק הודעות מהמספרים שיוגדרו כאן יופצו לשאר הקבוצות
-                </p>
-              </div>
-
-              {/* Allow all toggle */}
-              <div className={`${glassInner} p-4 flex items-center justify-between`}>
-                <div className="flex items-center gap-3">
-                  {allowAll ? (
-                    <Unlock className="h-5 w-5 text-emerald-400" />
-                  ) : (
-                    <Lock className="h-5 w-5 text-white/40" />
-                  )}
-                  <div>
-                    <p className="text-sm font-medium text-white">
-                      {"\uD83D\uDD13"} אפשר לכולם לשלוח
-                    </p>
-                    <p className="text-xs text-white/30 mt-0.5">
-                      כשהמתג דולק, כל הודעה של כל חבר בקבוצה תופץ
-                    </p>
-                  </div>
-                </div>
-                <Toggle value={allowAll} onChange={setAllowAll} />
-              </div>
-
-              {/* Phone inputs */}
-              <AnimatePresence>
-                {!allowAll && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="mt-4 space-y-4">
-                      {/* Add phone */}
-                      <div className="flex items-center gap-2">
-                        <Input
-                          value={newPhone}
-                          onChange={(e) => setNewPhone(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              addPhone();
-                            }
-                          }}
-                          placeholder="05X-XXXXXXX"
-                          className="flex-1 bg-white/5 border-white/10 text-white placeholder:text-white/30"
-                        />
-                        <Button
-                          type="button"
-                          onClick={addPhone}
-                          disabled={!newPhone.trim()}
-                          size="icon"
-                          className="shrink-0 bg-gradient-to-r from-violet-600 to-blue-600 shadow-md border-0 text-white h-10 w-10"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
-                      </div>
-
-                      {/* Phone list */}
-                      {phones.length > 0 && (
-                        <div className="space-y-1.5">
-                          {phones.map((phone, idx) => (
-                            <motion.div
-                              key={`${phone}-${idx}`}
-                              initial={{ opacity: 0, x: -20 }}
-                              animate={{ opacity: 1, x: 0 }}
-                              className={`${glassInner} flex items-center justify-between p-3`}
-                            >
-                              <p className="text-sm font-mono text-white/80">
-                                {phone}
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => removePhone(idx)}
-                                className="h-7 w-7 flex items-center justify-center rounded-lg text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </button>
-                            </motion.div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Permission checkboxes */}
-                      <div className={`${glassInner} p-4 space-y-3`}>
-                        <p className="text-sm font-medium text-white/70 mb-2">
-                          הרשאות
-                        </p>
-                        {[
-                          {
-                            key: "is_main_admin" as const,
-                            label: "מנהל ראשי",
-                            icon: Shield,
-                          },
-                          {
-                            key: "can_send_free" as const,
-                            label: "שליחה חופשית",
-                            icon: Send,
-                          },
-                          {
-                            key: "can_delete_all" as const,
-                            label: "מחיקה מכל הקבוצות",
-                            icon: X,
-                          },
-                          {
-                            key: "auto_new_groups" as const,
-                            label: "קבוצות חדשות אוטומטית",
-                            icon: Plus,
-                          },
-                        ].map(({ key, label, icon: Icon }) => (
-                          <label
-                            key={key}
-                            className="flex items-center gap-3 cursor-pointer group"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={permissions[key]}
-                              onChange={(e) =>
-                                setPermissions({
-                                  ...permissions,
-                                  [key]: e.target.checked,
-                                })
-                              }
-                              className="h-4 w-4 rounded border-white/20 bg-white/5 text-violet-500 focus:ring-violet-500/40"
-                            />
-                            <Icon className="h-4 w-4 text-white/30 group-hover:text-white/50 transition-colors" />
-                            <span className="text-sm text-white/60 group-hover:text-white/80 transition-colors">
-                              {label}
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </GlassSection>
-
-            {/* Nav */}
-            <div className="flex justify-between">
-              <MagneticButton>
-                <Button
-                  onClick={() => goToStep(4)}
-                  disabled={!canProceedStep3}
-                  className="bg-gradient-to-r from-violet-600 to-blue-600 shadow-lg shadow-violet-500/25 border-0 text-white"
-                >
-                  הבא
-                  <ChevronLeft className="h-4 w-4 mr-1" />
-                </Button>
-              </MagneticButton>
-              <Button
-                variant="ghost"
-                onClick={() => goToStep(2)}
-                className="text-white/50 hover:text-white hover:bg-white/5"
-              >
-                <ChevronRight className="h-4 w-4 ml-1" />
-                הקודם
-              </Button>
-            </div>
-          </motion.div>
-        )}
-
-        {/* ════════════════════════════════════════════════════
-           STEP 4: Settings
-           ════════════════════════════════════════════════════ */}
-        {currentStep === 4 && (
-          <motion.div
-            key="step4"
-            custom={direction}
-            variants={slideVariants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{ duration: 0.35, ease: "easeInOut" }}
-            className="space-y-6"
-          >
-            {/* ─── Basic Info ─── */}
-            <GlassSection>
-              <div className="space-y-1.5 mb-6">
-                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <span className="text-xl">{"\u2699\uFE0F"}</span>
-                  הגדרות
-                </h2>
-              </div>
-
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-white/70">
-                    שם הכלל *
-                  </label>
-                  <Input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder='לדוגמה: "עדכוני בוקר ללקוחות"'
-                    required
-                    className="bg-white/5 border-white/10 text-white placeholder:text-white/30"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-white/70">
-                    תיאור (אופציונלי)
-                  </label>
-                  <textarea
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="תיאור לשימוש פנימי..."
-                    rows={2}
-                    className="flex w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white shadow-sm backdrop-blur-sm ring-offset-background transition-all duration-200 placeholder:text-white/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:ring-offset-2"
-                  />
-                </div>
-              </div>
-            </GlassSection>
-
-            {/* ─── Delay Presets ─── */}
-            <GlassSection>
-              <div className="space-y-1.5 mb-5">
-                <h3 className="text-base font-semibold text-white flex items-center gap-2">
-                  <Clock className="h-4 w-4 text-violet-400" />
-                  מנגנון השהיה
-                </h3>
-                <p className="text-xs text-white/30">
-                  השהיה אקראית בין הודעות כדי למנוע חסימות
-                </p>
-              </div>
-
-              <div className="grid grid-cols-4 gap-2">
-                {(
-                  [
-                    {
-                      value: "fast" as DelayPreset,
-                      label: "מהיר",
-                      icon: Zap,
-                      desc: "1-3 שניות",
-                    },
-                    {
-                      value: "medium" as DelayPreset,
-                      label: "בינוני",
-                      icon: Gauge,
-                      desc: "5-15 שניות",
-                    },
-                    {
-                      value: "slow" as DelayPreset,
-                      label: "איטי",
-                      icon: Shield,
-                      desc: "15-45 שניות",
-                    },
-                    {
-                      value: "custom" as DelayPreset,
-                      label: "מותאם",
-                      icon: SlidersHorizontal,
-                      desc: "הגדרה ידנית",
-                    },
-                  ] as const
-                ).map(({ value, label, icon: Icon, desc }) => (
-                  <motion.button
-                    key={value}
-                    type="button"
-                    whileHover={{ scale: 1.03 }}
-                    whileTap={{ scale: 0.97 }}
-                    onClick={() => setDelayPreset(value)}
-                    className={`flex flex-col items-center gap-2 rounded-xl border-2 p-3 text-center transition-all duration-200 ${
-                      delayPreset === value
-                        ? "border-violet-500/60 bg-violet-500/10 shadow-md shadow-violet-500/10"
-                        : "border-white/10 hover:border-white/20 hover:bg-white/5"
-                    }`}
-                  >
-                    <Icon
-                      className={`h-5 w-5 ${
-                        delayPreset === value
-                          ? "text-violet-400"
-                          : "text-white/30"
-                      }`}
+                {defaultSuffixEnabled && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                    <textarea
+                      value={defaultSuffix} onChange={e => setDefaultSuffix(e.target.value)}
+                      rows={3} placeholder="לדוגמה: 📌 הצטרף לערוץ שלנו: t.me/mychannel"
+                      className="mt-1 flex w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white shadow-sm placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500/40"
                     />
-                    <span
-                      className={`text-sm font-medium ${
-                        delayPreset === value ? "text-white" : "text-white/60"
-                      }`}
-                    >
-                      {label}
-                    </span>
-                    <span className="text-[10px] text-white/30">{desc}</span>
-                  </motion.button>
-                ))}
-              </div>
-
-              <AnimatePresence>
-                {delayPreset === "custom" && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="mt-4 grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <label className="text-sm font-medium text-white/50">
-                          מינימום (שניות)
-                        </label>
-                        <Input
-                          type="number"
-                          value={delayMin}
-                          onChange={(e) => setDelayMin(Number(e.target.value))}
-                          min={1}
-                          className="bg-white/5 border-white/10 text-white"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-sm font-medium text-white/50">
-                          מקסימום (שניות)
-                        </label>
-                        <Input
-                          type="number"
-                          value={delayMax}
-                          onChange={(e) => setDelayMax(Number(e.target.value))}
-                          min={1}
-                          className="bg-white/5 border-white/10 text-white"
-                        />
-                      </div>
-                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
 
-              <div className={`mt-3 ${glassInner} p-3 text-sm text-blue-300/60`}>
-                השהיה משתנה של {delayMin}-{delayMax} שניות בין הודעות
-              </div>
-            </GlassSection>
+              {/* Top banner */}
+              <ToggleRow
+                icon={Layers} label="כותרת עליונה (Banner)"
+                desc="טקסט שיופיע בתחילת כל הודעה"
+                value={topBannerEnabled} onChange={setTopBannerEnabled}
+              />
+              <AnimatePresence>
+                {topBannerEnabled && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                    <textarea
+                      value={topBanner} onChange={e => setTopBanner(e.target.value)}
+                      rows={2} placeholder="לדוגמה: 🔴 עדכון חשוב:"
+                      className="mt-1 flex w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white shadow-sm placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500/40"
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
-            {/* ─── Controls ─── */}
-            <GlassSection>
-              <h3 className="text-base font-semibold text-white mb-5 flex items-center gap-2">
-                <SlidersHorizontal className="h-4 w-4 text-violet-400" />
-                שליטה ובקרה
-              </h3>
+              {/* Telegram suffix */}
+              <ToggleRow
+                icon={Send} label="חתימה מיוחדת לטלגרם"
+                desc="חתימה ייחודית לקבוצות Telegram בלבד"
+                value={telegramSuffixEnabled} onChange={setTelegramSuffixEnabled}
+                iconColor="text-blue-400"
+              />
+              <AnimatePresence>
+                {telegramSuffixEnabled && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                    <textarea
+                      value={telegramSuffix} onChange={e => setTelegramSuffix(e.target.value)}
+                      rows={2} placeholder="חתימה לטלגרם בלבד..."
+                      className="mt-1 flex w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white shadow-sm placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500/40"
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Hash clean-send */}
+              <ToggleRow
+                icon={Hash} label='שליחה נקייה עם "#"'
+                desc='כשהודעה מסתיימת ב-"#" — הסמל נמחק ותצוגת קישורים מושבתת'
+                value={hashStripEnabled} onChange={setHashStripEnabled}
+                iconColor="text-amber-400"
+              />
+
+              {/* Per-group suffixes (collapsible) */}
+              {destinationIds.length > 1 && (
+                <div className={`${glassInner} overflow-hidden`}>
+                  <button
+                    type="button"
+                    onClick={() => setPerGroupOpen(v => !v)}
+                    className="flex w-full items-center justify-between p-4"
+                  >
+                    <div className="flex items-center gap-3">
+                      <MessageSquare className="h-4 w-4 text-violet-400" />
+                      <div className="text-right">
+                        <p className="text-sm font-medium text-white">חתימות לפי קבוצה</p>
+                        <p className="text-xs text-white/40">התאמה אישית לכל קבוצת יעד</p>
+                      </div>
+                    </div>
+                    {perGroupOpen ? <ChevronUp className="h-4 w-4 text-white/30" /> : <ChevronDown className="h-4 w-4 text-white/30" />}
+                  </button>
+                  <AnimatePresence>
+                    {perGroupOpen && (
+                      <motion.div initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }} className="overflow-hidden">
+                        <div className="border-t border-white/[0.06] p-4 space-y-3 max-h-64 overflow-y-auto">
+                          {perGroupSuffixes.map(pgs => {
+                            const dest = destinations.find(d => d.id === pgs.destination_id);
+                            return (
+                              <div key={pgs.destination_id} className="space-y-2">
+                                <p className="text-xs text-white/60 font-medium">
+                                  {dest?.display_name || dest?.platform_dest_id || pgs.destination_id.slice(0, 8)}
+                                </p>
+                                <select
+                                  value={pgs.mode}
+                                  onChange={e => setPerGroupSuffixes(prev =>
+                                    prev.map(p => p.destination_id === pgs.destination_id
+                                      ? { ...p, mode: e.target.value as SuffixOverride }
+                                      : p
+                                    )
+                                  )}
+                                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white [&>option]:bg-slate-900"
+                                >
+                                  <option value="default">ברירת מחדל</option>
+                                  <option value="custom">חתימה מותאמת</option>
+                                  <option value="none">ללא חתימה</option>
+                                </select>
+                                {pgs.mode === "custom" && (
+                                  <Input
+                                    value={pgs.custom_text}
+                                    onChange={e => setPerGroupSuffixes(prev =>
+                                      prev.map(p => p.destination_id === pgs.destination_id ? { ...p, custom_text: e.target.value } : p)
+                                    )}
+                                    placeholder="חתימה לקבוצה זו..."
+                                    className="text-xs bg-white/5 border-white/10 text-white placeholder:text-white/30"
+                                  />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              )}
+            </div>
+
+            {/* Nav */}
+            <div className="flex justify-between">
+              <MagneticButton>
+                <Button onClick={() => goTo(3)} className="bg-gradient-to-r from-violet-600 to-blue-600 shadow-lg shadow-violet-500/25 border-0 text-white">
+                  הבא — התנגשות בוטים
+                  <ChevronLeft className="h-4 w-4 mr-1" />
+                </Button>
+              </MagneticButton>
+              <Button variant="ghost" onClick={() => goTo(1)} className="text-white/50 hover:text-white hover:bg-white/5">
+                <ChevronRight className="h-4 w-4 ml-1" /> הקודם
+              </Button>
+            </div>
+          </motion.div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════
+            STEP 3 — התנגשות בוטים
+            ══════════════════════════════════════════════════════ */}
+        {step === 3 && (
+          <motion.div key="s3" custom={dir} variants={slide} initial="enter" animate="center" exit="exit"
+            transition={{ duration: 0.3, ease: "easeInOut" }} className="space-y-4">
+
+            <div className={`${glass} p-6 space-y-5`}>
+              <div>
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <span className="text-xl">🤖</span> הגדרת התנגשות בוטים
+                </h2>
+                <p className="text-sm text-white/40 mt-1">
+                  מה קורה כשבוט אחר פועל באותה קבוצת מקור?
+                </p>
+              </div>
 
               <div className="space-y-3">
-                {/* Requires Approval */}
-                <div className={`${glassInner} p-4 flex items-center justify-between`}>
-                  <div>
-                    <p className="text-sm font-medium text-white">
-                      דורש אישור לפני שליחה
-                    </p>
-                    <p className="text-xs text-white/30 mt-0.5">
-                      הבוט ישלח לך כפתורי אישור לפני תחילת ההפצה
-                    </p>
-                  </div>
-                  <Toggle
-                    value={requiresApproval}
-                    onChange={setRequiresApproval}
-                  />
-                </div>
-
-                {/* Message types */}
-                <div className={`${glassInner} p-4 space-y-3`}>
-                  <p className="text-sm font-medium text-white/70 mb-2">
-                    סוגי הודעות להעברה
-                  </p>
-                  {[
-                    {
-                      label: "תמונות/וידאו",
-                      value: forwardMedia,
-                      onChange: setForwardMedia,
-                      icon: Image,
-                    },
-                    {
-                      label: "קבצים",
-                      value: forwardFiles,
-                      onChange: setForwardFiles,
-                      icon: FileText,
-                    },
-                    {
-                      label: "סקרים",
-                      value: forwardPolls,
-                      onChange: setForwardPolls,
-                      icon: BarChart3,
-                    },
-                  ].map(({ label, value, onChange, icon: Icon }) => (
-                    <div
-                      key={label}
-                      className="flex items-center justify-between"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Icon className="h-4 w-4 text-white/30" />
-                        <span className="text-sm text-white/60">{label}</span>
-                      </div>
-                      <Toggle value={value} onChange={onChange} />
-                    </div>
-                  ))}
-                </div>
-
-                {/* Strip sender info */}
-                <div className={`${glassInner} p-4 flex items-center justify-between`}>
-                  <div className="flex items-center gap-2">
-                    <Users className="h-4 w-4 text-white/30" />
-                    <span className="text-sm text-white/60">
-                      הסר פרטי שולח
-                    </span>
-                  </div>
-                  <Toggle
-                    value={stripSenderInfo}
-                    onChange={setStripSenderInfo}
-                  />
-                </div>
-
-                {/* Hash strip */}
-                <div className={`${glassInner} p-4 flex items-center justify-between`}>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <Hash className="h-4 w-4 text-white/30" />
-                      <span className="text-sm text-white/60">
-                        תכונת # (שלח בלי תצוגה מקדימה)
-                      </span>
-                    </div>
-                    <p className="text-xs text-white/20 mt-0.5 mr-6">
-                      הוספת # בתחילת ההודעה תשלח ללא תצוגה מקדימה של קישורים
-                    </p>
-                  </div>
-                  <Toggle
-                    value={hashStripEnabled}
-                    onChange={setHashStripEnabled}
-                  />
-                </div>
-              </div>
-            </GlassSection>
-
-            {/* ─── Suffix Engine ─── */}
-            <GlassSection>
-              <h3 className="text-base font-semibold text-white mb-5 flex items-center gap-2">
-                {"\u270D\uFE0F"} מנוע חתימות
-              </h3>
-
-              <div className="space-y-4">
-                {/* Default Suffix */}
-                <div className={`${glassInner} p-4 space-y-3`}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-white/70">
-                      חתימת ברירת מחדל
-                    </span>
-                    <Toggle
-                      value={defaultSuffixEnabled}
-                      onChange={setDefaultSuffixEnabled}
-                    />
-                  </div>
-                  <AnimatePresence>
-                    {defaultSuffixEnabled && (
-                      <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
-                        className="overflow-hidden"
-                      >
-                        <textarea
-                          value={defaultSuffix}
-                          onChange={(e) => setDefaultSuffix(e.target.value)}
-                          placeholder="הכנס את החתימה שלך כאן..."
-                          rows={2}
-                          className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white backdrop-blur-sm placeholder:text-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-                        />
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-                {/* Top Banner */}
-                <div className={`${glassInner} p-4 space-y-3`}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-white/70">
-                      באנר עליון
-                    </span>
-                    <Toggle
-                      value={topBannerEnabled}
-                      onChange={setTopBannerEnabled}
-                    />
-                  </div>
-                  <AnimatePresence>
-                    {topBannerEnabled && (
-                      <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
-                        className="overflow-hidden"
-                      >
-                        <textarea
-                          value={topBanner}
-                          onChange={(e) => setTopBanner(e.target.value)}
-                          placeholder="טקסט שיופיע בראש ההודעה..."
-                          rows={2}
-                          className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white backdrop-blur-sm placeholder:text-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-                        />
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-                {/* Telegram Suffix */}
-                <div className={`${glassInner} p-4 space-y-3`}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-white/70">
-                      חתימת טלגרם
-                    </span>
-                    <Toggle
-                      value={telegramSuffixEnabled}
-                      onChange={setTelegramSuffixEnabled}
-                    />
-                  </div>
-                  <AnimatePresence>
-                    {telegramSuffixEnabled && (
-                      <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
-                        className="overflow-hidden"
-                      >
-                        <textarea
-                          value={telegramSuffix}
-                          onChange={(e) => setTelegramSuffix(e.target.value)}
-                          placeholder="חתימה ייחודית לערוצי טלגרם..."
-                          rows={2}
-                          className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white backdrop-blur-sm placeholder:text-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
-                        />
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-                {/* Per-group suffix overrides */}
-                {destinationIds.length > 0 && (
-                  <div className={`${glassInner} p-4`}>
-                    <button
-                      type="button"
-                      onClick={() => setPerGroupSuffixOpen(!perGroupSuffixOpen)}
-                      className="flex w-full items-center justify-between"
-                    >
-                      <span className="text-sm font-medium text-white/70">
-                        חתימה מותאמת לקבוצה ספציפית
-                      </span>
-                      {perGroupSuffixOpen ? (
-                        <ChevronUp className="h-4 w-4 text-white/30" />
-                      ) : (
-                        <ChevronDown className="h-4 w-4 text-white/30" />
-                      )}
-                    </button>
-
-                    <AnimatePresence>
-                      {perGroupSuffixOpen && (
-                        <motion.div
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: "auto" }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="overflow-hidden"
-                        >
-                          <div className="mt-4 space-y-3">
-                            {perGroupSuffixes.map((ps) => {
-                              const dest = destinations.find(
-                                (d) => d.id === ps.destination_id
-                              );
-                              if (!dest) return null;
-                              return (
-                                <div
-                                  key={ps.destination_id}
-                                  className="space-y-2 border-b border-white/5 pb-3 last:border-0"
-                                >
-                                  <p className="text-xs font-medium text-white/50 truncate">
-                                    {dest.display_name ||
-                                      dest.platform_dest_id}
-                                  </p>
-                                  <select
-                                    value={ps.mode}
-                                    onChange={(e) =>
-                                      updatePerGroupSuffix(
-                                        ps.destination_id,
-                                        "mode",
-                                        e.target.value
-                                      )
-                                    }
-                                    className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-violet-500/40 [&>option]:bg-slate-900 [&>option]:text-white"
-                                  >
-                                    <option value="default">ברירת מחדל</option>
-                                    <option value="custom">
-                                      מותאם אישית
-                                    </option>
-                                    <option value="none">ללא חתימה</option>
-                                    <option value="telegram">
-                                      חתימת טלגרם
-                                    </option>
-                                  </select>
-                                  {ps.mode === "custom" && (
-                                    <Input
-                                      value={ps.custom_text}
-                                      onChange={(e) =>
-                                        updatePerGroupSuffix(
-                                          ps.destination_id,
-                                          "custom_text",
-                                          e.target.value
-                                        )
-                                      }
-                                      placeholder="חתימה מותאמת..."
-                                      className="bg-white/5 border-white/10 text-white placeholder:text-white/20 text-sm"
-                                    />
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                )}
-              </div>
-            </GlassSection>
-
-            {/* ─── Bot Conflict ─── */}
-            <GlassSection>
-              <h3 className="text-base font-semibold text-white mb-2 flex items-center gap-2">
-                {"\uD83E\uDD16"} התנגשות בוטים
-              </h3>
-              <p className="text-xs text-white/30 mb-4">
-                מה יקרה כשהודעת הפצה נשלחת לקבוצה שבה פועל בוט נוסף?
-              </p>
-
-              <div className="space-y-2">
                 {(
                   [
                     {
                       value: "run_both" as BotConflictMode,
-                      label: "שניהם פועלים",
-                      desc: "גם הפצה וגם בוט פועלים במקביל",
+                      icon: CheckCircle2,
+                      iconColor: "text-emerald-400",
+                      bg: "from-emerald-500/20 to-teal-500/20",
+                      label: "הפעל הכל",
+                      desc: "גם ההפצה וגם הבוט יפעלו בו-זמנית. מתאים לרוב המקרים.",
+                      recommended: true,
                     },
                     {
                       value: "run_distribution_only" as BotConflictMode,
-                      label: "תפוצה בלבד",
-                      desc: "רק הפצה תפעל, הבוט יושבת",
+                      icon: Ban,
+                      iconColor: "text-amber-400",
+                      bg: "from-amber-500/20 to-orange-500/20",
+                      label: "הפצה בלבד — עצור בוטים אחרים",
+                      desc: "ההפצה תרוץ, אבל בוטים אחרים בקבוצה יושתקו.",
+                      recommended: false,
                     },
                     {
                       value: "run_bot_only" as BotConflictMode,
-                      label: "בוט בלבד",
-                      desc: "רק הבוט יפעל, ההפצה תושבת",
+                      icon: Bot,
+                      iconColor: "text-blue-400",
+                      bg: "from-blue-500/20 to-cyan-500/20",
+                      label: "בוט בלבד — עצור הפצה",
+                      desc: "הבוט יפעל, אבל הפצת ההודעות תושהה בנוכחות בוט אחר.",
+                      recommended: false,
                     },
                   ] as const
-                ).map(({ value, label, desc }) => (
-                  <label
-                    key={value}
-                    className={`flex cursor-pointer items-center gap-3 rounded-xl border-2 p-4 transition-all duration-200 ${
-                      botConflictMode === value
-                        ? "border-violet-500/60 bg-violet-500/10 shadow-sm shadow-violet-500/10"
+                ).map(opt => (
+                  <motion.button
+                    key={opt.value}
+                    type="button"
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    onClick={() => setBotConflictMode(opt.value)}
+                    className={`group relative w-full rounded-2xl border-2 p-5 text-right transition-all duration-300 ${
+                      botConflictMode === opt.value
+                        ? "border-violet-500/50 bg-gradient-to-br from-violet-500/10 to-blue-500/5 shadow-lg shadow-violet-500/10"
                         : "border-white/10 hover:border-white/20 hover:bg-white/5"
                     }`}
                   >
-                    <input
-                      type="radio"
-                      name="bot_conflict_mode"
-                      value={value}
-                      checked={botConflictMode === value}
-                      onChange={() => setBotConflictMode(value)}
-                      className="h-4 w-4 border-white/20 bg-white/5 text-violet-500 focus:ring-violet-500/40"
-                    />
-                    <div>
-                      <span className="text-sm font-medium text-white">
-                        {label}
-                      </span>
-                      <p className="text-xs text-white/30">{desc}</p>
+                    <div className="flex items-start gap-4">
+                      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${opt.bg}`}>
+                        <opt.icon className={`h-5 w-5 ${opt.iconColor}`} />
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-semibold text-white">{opt.label}</p>
+                          {opt.recommended && (
+                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                              מומלץ
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-white/40 mt-1">{opt.desc}</p>
+                      </div>
+                      <div className={`h-5 w-5 shrink-0 rounded-full border-2 transition-all ${
+                        botConflictMode === opt.value
+                          ? "border-violet-500 bg-violet-500"
+                          : "border-white/20"
+                      }`}>
+                        {botConflictMode === opt.value && <Check className="h-full w-full p-0.5 text-white" />}
+                      </div>
                     </div>
-                  </label>
+                  </motion.button>
                 ))}
               </div>
-            </GlassSection>
 
-            {/* ─── Submit + Nav ─── */}
-            <div className="flex justify-between items-center">
+              {/* Info box */}
+              <div className={`${glassInner} p-4 flex items-start gap-3`}>
+                <Shield className="h-4 w-4 shrink-0 text-blue-400 mt-0.5" />
+                <p className="text-xs text-blue-300/70">
+                  הגדרה זו חלה על קבוצת המקור בלבד. קבוצות היעד אינן מושפעות ממנה.
+                </p>
+              </div>
+            </div>
+
+            {/* Nav */}
+            <div className="flex justify-between">
               <MagneticButton>
-                <Button
-                  onClick={handleSubmit}
-                  disabled={loading || !name.trim()}
-                  className="bg-gradient-to-r from-violet-600 to-blue-600 shadow-lg shadow-violet-500/25 border-0 text-white px-8 py-3 text-base"
-                >
-                  {loading ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    <>
-                      <Check className="h-4 w-4 ml-2" />
-                      צור כלל הפצה
-                    </>
-                  )}
+                <Button onClick={() => goTo(4)} className="bg-gradient-to-r from-violet-600 to-blue-600 shadow-lg shadow-violet-500/25 border-0 text-white">
+                  הבא — אישורים ושמירה
+                  <ChevronLeft className="h-4 w-4 mr-1" />
                 </Button>
               </MagneticButton>
-              <Button
-                variant="ghost"
-                onClick={() => goToStep(3)}
-                className="text-white/50 hover:text-white hover:bg-white/5"
-              >
-                <ChevronRight className="h-4 w-4 ml-1" />
-                הקודם
+              <Button variant="ghost" onClick={() => goTo(2)} className="text-white/50 hover:text-white hover:bg-white/5">
+                <ChevronRight className="h-4 w-4 ml-1" /> הקודם
               </Button>
             </div>
           </motion.div>
         )}
+
+        {/* ══════════════════════════════════════════════════════
+            STEP 4 — אישורים ושמירה
+            ══════════════════════════════════════════════════════ */}
+        {step === 4 && (
+          <motion.div key="s4" custom={dir} variants={slide} initial="enter" animate="center" exit="exit"
+            transition={{ duration: 0.3, ease: "easeInOut" }} className="space-y-4">
+
+            {/* Name + Description */}
+            <div className={`${glass} p-6 space-y-4`}>
+              <div>
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <span className="text-xl">✅</span> שם וסיכום
+                </h2>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-white/70">שם הכלל *</label>
+                <Input
+                  value={name} onChange={e => setName(e.target.value)}
+                  placeholder='לדוגמה: "עדכוני בוקר ללקוחות"'
+                  className="bg-white/5 border-white/10 text-white placeholder:text-white/30"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-white/70">תיאור (אופציונלי)</label>
+                <textarea
+                  value={description} onChange={e => setDescription(e.target.value)}
+                  placeholder="תיאור פנימי..." rows={2}
+                  className="flex w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white shadow-sm backdrop-blur-sm placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500/40"
+                />
+              </div>
+            </div>
+
+            {/* Interactive Approval — highlighted */}
+            <div className={`${glass} p-6 space-y-4 border-violet-500/20`}>
+              <div>
+                <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                  <BellRing className="h-5 w-5 text-violet-400" />
+                  אישור אינטראקטיבי
+                </h2>
+                <p className="text-sm text-white/40 mt-1">
+                  הבוט ישלח לך כפתורי Approve / Cancel לפני כל הפצה
+                </p>
+              </div>
+
+              <div className={`${glassInner} p-5 flex items-center justify-between gap-4 ${requiresApproval ? "border-violet-500/30 bg-violet-500/5" : ""}`}>
+                <div className="flex items-start gap-3">
+                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${requiresApproval ? "from-violet-500/30 to-blue-500/20" : "from-white/5 to-white/5"}`}>
+                    <BellRing className={`h-5 w-5 ${requiresApproval ? "text-violet-400" : "text-white/30"}`} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-white">דורש אישור שלי לפני שליחה</p>
+                    <p className="text-xs text-white/40 mt-0.5">
+                      {requiresApproval
+                        ? "✅ הבוט ישלח לך DM עם כפתורי אישור לפני כל הפצה"
+                        : "כאשר מופעל — כל הודעה ממתינה לאישורך לפני שנשלחת"}
+                    </p>
+                  </div>
+                </div>
+                <Toggle value={requiresApproval} onChange={setRequiresApproval} />
+              </div>
+            </div>
+
+            {/* Delay + Media */}
+            <div className={`${glass} p-6 space-y-5`}>
+              <h3 className="text-base font-semibold text-white flex items-center gap-2">
+                <Clock className="h-4 w-4 text-violet-400" />
+                מנגנון השהיה
+              </h3>
+              <div className="grid grid-cols-4 gap-2">
+                {(
+                  [
+                    { value: "fast" as DelayPreset, label: "מהיר", icon: Zap, desc: "1-3 שנ׳" },
+                    { value: "medium" as DelayPreset, label: "בינוני", icon: Gauge, desc: "5-15 שנ׳" },
+                    { value: "slow" as DelayPreset, label: "איטי", icon: Shield, desc: "15-45 שנ׳" },
+                    { value: "custom" as DelayPreset, label: "מותאם", icon: SlidersHorizontal, desc: "ידני" },
+                  ] as const
+                ).map(({ value, label, icon: Icon, desc }) => (
+                  <motion.button
+                    key={value} type="button"
+                    whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+                    onClick={() => setDelayPreset(value)}
+                    className={`flex flex-col items-center gap-2 rounded-xl border-2 p-3 text-center transition-all ${
+                      delayPreset === value
+                        ? "border-violet-500/60 bg-violet-500/10"
+                        : "border-white/10 hover:border-white/20 hover:bg-white/5"
+                    }`}
+                  >
+                    <Icon className={`h-4 w-4 ${delayPreset === value ? "text-violet-400" : "text-white/30"}`} />
+                    <span className={`text-xs font-medium ${delayPreset === value ? "text-white" : "text-white/50"}`}>{label}</span>
+                    <span className="text-[10px] text-white/30">{desc}</span>
+                  </motion.button>
+                ))}
+              </div>
+              <AnimatePresence>
+                {delayPreset === "custom" && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                    <div className="grid grid-cols-2 gap-4 mt-1">
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-white/50">מינימום (שניות)</label>
+                        <Input type="number" value={delayMin} onChange={e => setDelayMin(Number(e.target.value))} min={1} className="bg-white/5 border-white/10 text-white" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-white/50">מקסימום (שניות)</label>
+                        <Input type="number" value={delayMax} onChange={e => setDelayMax(Number(e.target.value))} min={1} className="bg-white/5 border-white/10 text-white" />
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Media toggles */}
+              <div className="space-y-2">
+                <p className="text-xs text-white/50 font-medium">סוגי תוכן להעברה</p>
+                {[
+                  { label: "תמונות / וידאו", value: forwardMedia, onChange: setForwardMedia, icon: Image },
+                  { label: "קבצים", value: forwardFiles, onChange: setForwardFiles, icon: FileText },
+                  { label: "סקרים", value: forwardPolls, onChange: setForwardPolls, icon: BarChart3 },
+                ].map(({ label, value, onChange, icon: Icon }) => (
+                  <div key={label} className="flex items-center justify-between gap-3 px-1">
+                    <div className="flex items-center gap-2">
+                      <Icon className="h-3.5 w-3.5 text-white/30" />
+                      <span className="text-sm text-white/70">{label}</span>
+                    </div>
+                    <Toggle value={value} onChange={onChange} />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Authorized senders (collapsed) */}
+            <div className={`${glass} overflow-hidden`}>
+              <button
+                type="button"
+                onClick={() => setSendersOpen(v => !v)}
+                className="flex w-full items-center justify-between p-5"
+              >
+                <div className="flex items-center gap-3">
+                  <Users className="h-4 w-4 text-violet-400" />
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-white">מורשי שליחה</p>
+                    <p className="text-xs text-white/40">
+                      {allowAll ? "כולם מורשים" : phones.length > 0 ? `${phones.length} מספרים מורשים` : "לא הוגדרו — ברירת מחדל: כולם"}
+                    </p>
+                  </div>
+                </div>
+                {sendersOpen ? <ChevronUp className="h-4 w-4 text-white/30" /> : <ChevronDown className="h-4 w-4 text-white/30" />}
+              </button>
+              <AnimatePresence>
+                {sendersOpen && (
+                  <motion.div initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }} className="overflow-hidden">
+                    <div className="border-t border-white/[0.06] p-5 space-y-3">
+                      <div className={`${glassInner} p-4 flex items-center justify-between`}>
+                        <p className="text-sm font-medium text-white">🔓 אפשר לכולם לשלוח</p>
+                        <Toggle value={allowAll} onChange={setAllowAll} />
+                      </div>
+                      {!allowAll && (
+                        <div className="space-y-2">
+                          <div className="flex gap-2">
+                            <Input
+                              value={newPhone} onChange={e => setNewPhone(e.target.value)}
+                              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addPhone(); } }}
+                              placeholder="05X-XXXXXXX"
+                              className="flex-1 bg-white/5 border-white/10 text-white placeholder:text-white/30"
+                            />
+                            <Button type="button" onClick={addPhone} disabled={!newPhone.trim()} size="icon"
+                              className="shrink-0 bg-gradient-to-r from-violet-600 to-blue-600 border-0 text-white h-10 w-10">
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <div className="space-y-1.5">
+                            {phones.map((phone, idx) => (
+                              <div key={phone} className={`${glassInner} flex items-center justify-between p-3`}>
+                                <p className="text-sm font-mono text-white/80">{phone}</p>
+                                <button type="button" onClick={() => setPhones(phones.filter((_, i) => i !== idx))}
+                                  className="h-7 w-7 flex items-center justify-center rounded-lg text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            {/* Summary */}
+            <div className={`${glassInner} p-4 space-y-2`}>
+              <p className="text-xs text-white/40 font-medium mb-3">סיכום הגדרות</p>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="flex items-center gap-2 text-white/50">
+                  <Check className="h-3 w-3 text-violet-400" />
+                  {destinationIds.length} קבוצות יעד
+                </div>
+                <div className="flex items-center gap-2 text-white/50">
+                  <Check className="h-3 w-3 text-violet-400" />
+                  {triggerType === "listen" ? "האזנה לקבוצה" : "הודעה לבוט"}
+                </div>
+                <div className="flex items-center gap-2 text-white/50">
+                  <Check className="h-3 w-3 text-violet-400" />
+                  {delayPreset === "custom" ? `${delayMin}-${delayMax} שנ׳` : delayPreset}
+                </div>
+                <div className="flex items-center gap-2 text-white/50">
+                  {requiresApproval
+                    ? <><Check className="h-3 w-3 text-emerald-400" /> דורש אישור</>
+                    : <><X className="h-3 w-3 text-white/20" /> ללא אישור</>
+                  }
+                </div>
+                {(defaultSuffixEnabled || topBannerEnabled) && (
+                  <div className="flex items-center gap-2 text-white/50">
+                    <Check className="h-3 w-3 text-violet-400" />
+                    חתימות מוגדרות
+                  </div>
+                )}
+                {hashStripEnabled && (
+                  <div className="flex items-center gap-2 text-white/50">
+                    <Check className="h-3 w-3 text-amber-400" />
+                    Clean-Send פעיל
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Nav + Save */}
+            <div className="flex justify-between gap-3">
+              <MagneticButton>
+                <Button
+                  onClick={handleSubmit}
+                  disabled={loading || !canStep4}
+                  className="bg-gradient-to-r from-violet-600 to-blue-600 px-8 shadow-lg shadow-violet-500/25 border-0 text-white"
+                >
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "✨ צור אוטומציה"}
+                </Button>
+              </MagneticButton>
+              <Button variant="ghost" onClick={() => goTo(3)} className="text-white/50 hover:text-white hover:bg-white/5">
+                <ChevronRight className="h-4 w-4 ml-1" /> הקודם
+              </Button>
+            </div>
+          </motion.div>
+        )}
+
       </AnimatePresence>
     </div>
   );

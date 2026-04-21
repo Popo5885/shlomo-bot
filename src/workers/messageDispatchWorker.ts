@@ -18,7 +18,7 @@ import { sendQueueMessage, sendPoll } from '../services/whatsapp/messageSender.j
 import { sendTelegramMessage } from '../services/telegram/telegramSender.js';
 import { QUEUE_NAME, enqueueMessage } from '../services/queue/queueService.js';
 import { shouldRetry, getNextRetryAt, calculateRetryDelay } from '../services/queue/retryStrategy.js';
-import { isShabbatBlocked } from '../services/shabbat/shabbatBlocker.js';
+import { isShabbatBlocked, getNextAvailableTime } from '../services/shabbat/shabbatBlocker.js';
 import { logger } from '../utils/logger.js';
 import type { MessageQueue, ConnectedAccount, Destination } from '../types/database.js';
 
@@ -84,7 +84,11 @@ async function processMessage(job: Job<JobPayload>): Promise<void> {
   try {
     const shabbatBlocked = await isShabbatBlocked(queueItem.workspace_id);
     if (shabbatBlocked) {
-      await requeueWithDelay(queueItem, 3 * 60 * 60 * 1000, 'Shabbat blocking active');
+      // Delay until Motzaei Shabbat (calculated precisely), not a fixed 3h
+      const nextAvailable = getNextAvailableTime();
+      const delayMs = Math.max(nextAvailable.getTime() - Date.now(), 60_000); // at least 1 min
+      await requeueWithDelay(queueItem, delayMs, 'Shabbat blocking active — requeued for Motzaei Shabbat');
+      logger.info(`Shabbat blocker: item ${queueItem.id} delayed ${Math.round(delayMs / 60000)} min until ${nextAvailable.toISOString()}`);
       return;
     }
   } catch {
@@ -207,13 +211,40 @@ async function processMessage(job: Job<JobPayload>): Promise<void> {
         }
       }
 
+      // ── # Clean-Send: strip trailing '#' and disable link preview ──
+      let messageText = queueItem.message_text;
+      let forceNoLinkPreview = false;
+
+      if (messageText && messageText.trimEnd().endsWith('#')) {
+        // Strip the trailing '#' (and any surrounding whitespace before it)
+        messageText = messageText.trimEnd().slice(0, -1).trimEnd();
+        forceNoLinkPreview = true;
+        logger.debug(`Clean-send: stripped '#' from queue item ${queueItem.id}, link preview disabled`);
+      }
+
+      // Also honour hash_strip_enabled flag on the distribution rule
+      if (!forceNoLinkPreview && queueItem.source_rule_id) {
+        try {
+          const rule = await db('distribution_rules')
+            .where({ id: queueItem.source_rule_id })
+            .select('hash_strip_enabled')
+            .first();
+          if (rule?.hash_strip_enabled) {
+            forceNoLinkPreview = true;
+          }
+        } catch {
+          // non-critical — proceed
+        }
+      }
+
       sendResult = await sendQueueMessage(socket, {
         jid,
-        messageText: queueItem.message_text,
+        messageText,
         mediaUrl: queueItem.media_type === 'poll' ? null : queueItem.media_url,
         mediaType: queueItem.media_type === 'poll' ? null : queueItem.media_type,
         appendSuffix: queueItem.append_suffix,
         pollData,
+        linkPreview: forceNoLinkPreview ? false : undefined,
       });
     }
 

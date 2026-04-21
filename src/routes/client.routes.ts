@@ -988,6 +988,53 @@ clientRouter.patch(
 );
 
 // ══════════════════════════════════════════════════════════════
+//  AUTO-REPLY SETTINGS
+// ══════════════════════════════════════════════════════════════
+
+// GET /auto-reply-settings
+clientRouter.get(
+  '/auto-reply-settings',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      let settings = await wsQuery(req, 'auto_reply_settings').first();
+      if (!settings) {
+        settings = {
+          is_enabled: false,
+          greeting_text: 'שלום! קיבלנו את הודעתך ונחזור אליך בהקדם 😊',
+          send_lead_notification: true,
+          notification_phone: null,
+          cooldown_minutes: 60,
+        };
+      }
+      res.json({ success: true, data: settings });
+    } catch (err) { next(err); }
+  }
+);
+
+// PATCH /auto-reply-settings
+clientRouter.patch(
+  '/auto-reply-settings',
+  requirePermission('can_manage_bot_settings'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const schema = z.object({
+        is_enabled: z.boolean().optional(),
+        greeting_text: z.string().max(1000).optional(),
+        send_lead_notification: z.boolean().optional(),
+        notification_phone: z.string().max(50).nullable().optional(),
+        cooldown_minutes: z.number().int().min(1).max(1440).optional(),
+      });
+      const body = schema.parse(req.body);
+      await db('auto_reply_settings')
+        .insert({ workspace_id: req.workspace!.id, ...body })
+        .onConflict('workspace_id')
+        .merge({ ...body, updated_at: db.fn.now() });
+      res.json({ success: true, message: 'Auto-reply settings updated' });
+    } catch (err) { next(err); }
+  }
+);
+
+// ══════════════════════════════════════════════════════════════
 //  CRM / LEADS
 // ══════════════════════════════════════════════════════════════
 
@@ -1100,9 +1147,29 @@ clientRouter.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const invoices = await wsQuery(req, 'invoices')
-        .select('id', 'invoice_number', 'amount', 'currency', 'status', 'issued_at', 'pdf_url')
+        .select('id', 'invoice_number', 'amount', 'currency', 'status', 'description', 'issued_at', 'pdf_url',
+                db.raw("file_path IS NOT NULL as has_file"))
         .orderBy('issued_at', 'desc');
       res.json({ success: true, data: invoices });
+    } catch (err) { next(err); }
+  }
+);
+
+// GET /invoices/:id/download
+clientRouter.get(
+  '/invoices/:id/download',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const invoice = await wsQuery(req, 'invoices').where('invoices.id', req.params.id).first();
+      if (!invoice) throw new NotFoundError('Invoice not found');
+      if (!invoice.file_path) throw new AppError('No file attached to this invoice', 404, 'NO_FILE');
+
+      const path = await import('path');
+      const fs = await import('fs');
+      const absPath = path.default.resolve(invoice.file_path);
+      if (!fs.default.existsSync(absPath)) throw new AppError('File not found on server', 404, 'FILE_MISSING');
+
+      res.download(absPath, `invoice-${invoice.invoice_number}.pdf`);
     } catch (err) { next(err); }
   }
 );
@@ -1153,6 +1220,111 @@ clientRouter.post(
       }
 
       res.json({ success: true, data: { resumed: updated }, message: `${updated} messages resumed` });
+    } catch (err) { next(err); }
+  }
+);
+
+// ══════════════════════════════════════════════════════════════
+//  CONTRACT SIGNING (Phase 3.5)
+// ══════════════════════════════════════════════════════════════
+
+// GET /contract — fetch the contract document assigned to this workspace
+clientRouter.get(
+  '/contract',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspace = await db('workspaces')
+        .where({ id: req.workspace!.id })
+        .select('contract_signed', 'contract_signed_at', 'contract_version', 'contract_document_url', 'contract_revoked_at')
+        .first();
+
+      // Also get the default contract URL from admin settings
+      const defaultSetting = await db('admin_settings').where({ key: 'default_contract_url' }).first();
+      const defaultContractUrl = defaultSetting?.value || null;
+      const defaultVersion = (await db('admin_settings').where({ key: 'default_contract_version' }).first())?.value || 'v1';
+
+      res.json({
+        success: true,
+        data: {
+          ...workspace,
+          effective_document_url: workspace?.contract_document_url || defaultContractUrl,
+          effective_version: workspace?.contract_version || defaultVersion,
+        },
+      });
+    } catch (err) { next(err); }
+  }
+);
+
+// ══════════════════════════════════════════════════════════════
+//  REFERRAL SYSTEM
+// ══════════════════════════════════════════════════════════════
+
+// GET /referral — return workspace referral code (auto-generate if missing)
+clientRouter.get(
+  '/referral',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      let workspace = await db('workspaces').where({ id: req.workspace!.id }).first();
+      if (!workspace) throw new NotFoundError('Workspace not found');
+
+      // Generate code on-the-fly if missing (graceful fallback for old rows)
+      if (!workspace.referral_code) {
+        const code = ('REF' + crypto.randomBytes(4).toString('hex').toUpperCase()).slice(0, 10);
+        await db('workspaces').where({ id: req.workspace!.id }).update({ referral_code: code });
+        workspace = { ...workspace, referral_code: code };
+      }
+
+      // Count how many referrals converted
+      let conversions = 0;
+      try {
+        const converted = await db('referral_conversions')
+          .where({ referrer_workspace_id: req.workspace!.id })
+          .count('id as count')
+          .first();
+        conversions = Number((converted as any)?.count ?? 0);
+      } catch {
+        // table may not exist yet if migration hasn't run
+      }
+
+      res.json({
+        success: true,
+        data: {
+          referral_code: workspace.referral_code,
+          conversions,
+        },
+      });
+    } catch (err) { next(err); }
+  }
+);
+
+// POST /contract/sign — user signs the contract
+clientRouter.post(
+  '/contract/sign',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const schema = z.object({ agreed: z.literal(true) });
+      schema.parse(req.body);
+
+      const workspace = await db('workspaces').where({ id: req.workspace!.id }).first();
+      if (!workspace) throw new NotFoundError('Workspace not found');
+      if (workspace.contract_revoked_at && workspace.contract_signed) {
+        // Contract was revoked — allow re-signing
+      } else if (workspace.contract_signed && !workspace.contract_revoked_at) {
+        throw new AppError('Contract already signed', 400, 'ALREADY_SIGNED');
+      }
+
+      const defaultVersion = (await db('admin_settings').where({ key: 'default_contract_version' }).first())?.value || 'v1';
+
+      await db('workspaces').where({ id: req.workspace!.id }).update({
+        contract_signed: true,
+        contract_signed_at: db.fn.now(),
+        contract_version: workspace.contract_version || defaultVersion,
+        contract_revoked_at: null,
+        contract_revoked_reason: null,
+        updated_at: db.fn.now(),
+      });
+
+      res.json({ success: true, message: 'החוזה נחתם בהצלחה. ברוך הבא!' });
     } catch (err) { next(err); }
   }
 );
