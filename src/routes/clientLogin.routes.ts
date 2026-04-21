@@ -239,6 +239,14 @@ clientLoginRouter.post(
           throw new AuthError('החשבון ממתין לאישור מנהל');
         }
 
+        // Check if this email exists at all (even in an inactive workspace)
+        const anyMember = await db('workspace_members').where({ email }).first();
+        if (!anyMember) {
+          // Return a distinct code so the frontend can offer a "register" CTA
+          res.status(401).json({ success: false, message: 'החשבון לא נמצא במערכת', code: 'ACCOUNT_NOT_FOUND' });
+          return;
+        }
+
         throw new AuthError('Invalid email or password');
       }
 
