@@ -12,6 +12,10 @@ import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import { db } from '../config/database.js';
 import { AuthError, AppError } from '../utils/errors.js';
+import {
+  sendWelcomeEmail,
+  sendOwnerNewSignupNotification,
+} from '../services/email/emailService.js';
 
 export const clientLoginRouter = Router();
 
@@ -26,6 +30,96 @@ const registerSchema = z.object({
   password: z.string().min(6),
   full_name: z.string().min(1),
 });
+
+const signupSchema = z.object({
+  business_name: z.string().min(1).max(100),
+  full_name: z.string().min(1).max(100),
+  email: z.string().email(),
+  phone: z.string().min(7).max(20),
+  password: z.string().min(6),
+});
+
+// POST /api/client/signup — create a brand-new workspace (self-service onboarding)
+clientLoginRouter.post(
+  '/signup',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { business_name, full_name, email, phone, password } = signupSchema.parse(req.body);
+
+      // Check if email is already used across any workspace
+      const existing = await db('workspace_members').where({ email }).first();
+      if (existing) {
+        throw new AppError('כתובת האימייל כבר רשומה במערכת', 409, 'EMAIL_EXISTS');
+      }
+
+      const slug = business_name
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 40) + '-' + Date.now().toString(36);
+
+      await db.transaction(async (trx) => {
+        // Create workspace with status='pending'
+        const [workspace] = await trx('workspaces').insert({
+          name: business_name,
+          slug,
+          plan: 'trial',
+          owner_email: email,       // ← required NOT NULL column
+          is_active: true,
+          status: 'pending',
+          contact_phone: phone,
+          contract_signed: false,
+        }).returning('id');
+
+        // Create default roles for the workspace
+        const [ownerRole] = await trx('workspace_roles').insert({
+          workspace_id: workspace.id,
+          name: 'Owner',
+          slug: 'owner',
+          can_send_free: true,
+          requires_approval: false,
+          can_approve_messages: true,
+          can_global_delete: true,
+          can_manage_campaigns: true,
+          can_manage_members: true,
+          can_manage_destinations: true,
+          can_view_analytics: true,
+          can_manage_crm: true,
+          can_manage_bot_settings: true,
+        }).returning('id');
+
+        await trx('workspace_roles').insert([
+          { workspace_id: workspace.id, name: 'Viewer', slug: 'viewer' },
+        ]);
+
+        const password_hash = await bcrypt.hash(password, 12);
+
+        // Create owner member (active so they can log in and see pending screen)
+        await trx('workspace_members').insert({
+          workspace_id: workspace.id,
+          email,
+          full_name,
+          password_hash,
+          role_id: ownerRole.id,
+          is_owner: true,
+          is_active: true,
+          approval_status: 'approved',
+        });
+      });
+
+      // Send emails (fire-and-forget — don't block the response)
+      sendWelcomeEmail({ to: email, fullName: full_name, businessName: business_name }).catch(() => {});
+      sendOwnerNewSignupNotification({ fullName: full_name, businessName: business_name, email, phone }).catch(() => {});
+
+      res.status(201).json({
+        success: true,
+        message: 'החשבון נוצר בהצלחה. ממתין לאישור מנהל.',
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // POST /api/client/register — request to join a workspace
 clientLoginRouter.post(
@@ -120,7 +214,13 @@ clientLoginRouter.post(
           'w.slug as ws_slug',
           'w.plan as ws_plan',
           'w.plan_limits as ws_plan_limits',
-          'w.is_active as ws_active'
+          'w.is_active as ws_active',
+          'w.status as ws_status',
+          'w.contract_signed as ws_contract_signed',
+          'w.contract_signed_at as ws_contract_signed_at',
+          'w.contract_version as ws_contract_version',
+          'w.contract_document_url as ws_contract_document_url',
+          'w.contract_revoked_at as ws_contract_revoked_at'
         )
         .first();
 
@@ -204,6 +304,12 @@ clientLoginRouter.post(
             plan: member.ws_plan,
             plan_limits: member.ws_plan_limits ?? {},
             is_active: member.ws_active,
+            status: member.ws_status ?? 'active',
+            contract_signed: member.ws_contract_signed ?? false,
+            contract_signed_at: member.ws_contract_signed_at ?? null,
+            contract_version: member.ws_contract_version ?? null,
+            contract_document_url: member.ws_contract_document_url ?? null,
+            contract_revoked_at: member.ws_contract_revoked_at ?? null,
           },
         },
       });
